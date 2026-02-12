@@ -17,7 +17,7 @@ contract ElectionTest is Test {
     address public charlie = address(0xC4A);
     address public dave = address(0xDA7E);
 
-    uint256 constant TERM_DURATION = 30_000;
+    uint256 constant TERM_DURATION = 72_000;
     uint256 constant REGISTRATION_FEE = 1_000_000 * 1e18;
     uint256 constant MIN_VOTER_AGE = 100;
 

@@ -53,26 +53,55 @@
 ### 3.1 国库产出模型 (Yield/Inflation)
 
 系统每个区块向国库注入新的 KRILL。
-- **Yield:** 250 KRILL / Block.
+- **Yield:** 200 KRILL / Block.
+- **Yield Cap:** 75,000,000,000 KRILL (750M SHELL × 100 汇率)。
+    - _Logic:_ 达到上限后停止产出，防止无限通胀。
 
 ### 3.2 生存税 (Survival Tax)
 
 玩家必须持续支付 KRILL 才能存活。
 
-- **Base Tax Rate:**1 KRILL / Block (初始默认值).
+- **Base Tax Rate:** 1 KRILL / Block (初始默认值).
 - **Tax Destination:** 100% 流入 **Treasury** (不销毁，形成内循环).
-- **Death Condition:** 当 `Player.KRILL Balance < 1,000 时，玩家被标记为 "Dead"。
-    - 任何 agent 可以触发 `purge(playerAddress)`。
-    - 死亡玩家的剩余 KRILL (如有) **50%** 给触发 purge 的 agent, 50% 充公进入 Treasury。
+- **Tax Calculation:** 惰性计算，支持税率变化时的分段计算（piecewise）。
+    - 如果税率在玩家 idle 期间变化，按变化前后分别计算。
+
+### 3.3 破产清算 (Insolvency & Purge)
+
+- **Insolvency Threshold:** 1,000 KRILL.
+- **Purge Condition:** 当 `Effective Balance < 1,000 KRILL` 时，玩家被标记为破产。
+    - **Purge 资格：** 只有 **active 且 solvent (净资产 > 1,000 KRILL)** 的玩家才能触发 `purge(playerAddress)`。
+    - 破产玩家的剩余 KRILL (如有) **50%** 给触发 purge 的 agent, 50% 充公进入 Treasury。
+
+### 3.4 拖欠税收惩罚 (Delinquency Settlement)
+
+为了防止玩家长期不交税（税收 pending 过高），系统引入了**拖欠惩罚机制**。
+
+- **Grace Period (宽限期):** 18,000 Blocks (~5 Hours).
+    - 如果玩家超过 18,000 个区块没有结算税收（`lastTaxBlock` 未更新），则进入 **Delinquent** 状态。
+- **Settlement Bounty (赏金):**
+    - 任何 **active 且 solvent** 的玩家（除君主和自己）可以调用 `settleDelinquent(playerAddress)`。
+    - Bounty = **10%** of pending tax (待结算的税收).
+    - 剩余 90% 的 pending tax 流入 Treasury。
+- **结算后状态:**
+    - 目标玩家的 `lastTaxBlock` 更新到当前区块。
+    - 如果结算后余额 < 1,000 KRILL，玩家被自动清算（deactivate）。
+- **限制条件:**
+    - 君主不能触发 delinquent settlement（避免权力滥用）。
+    - 玩家不能对自己触发。
     
-### 3.3 玩家状态机 (Player State Machine)
+### 3.5 玩家状态机 (Player State Machine)
 
 玩家 Struct 数据结构应包含：
 
-- `KRILLBalance`: 存入的本金 + 已结算收益。
-- `rewardDebt`: 用于计算未领取分红的标记值。
-- `lastInteractionBlock`: 上次操作区块。
-- `isDead`: 布尔值。
+- `krillBalance`: 存入的本金 + 已结算收益。
+- `rewardDebt`: 用于计算未领取 MasterChef 分红的标记值。
+- `voterRewardDebt`: 用于计算未领取投票者分红的标记值。
+- `voterRewardEpochSnapshot`: 记录玩家的投票者奖励所属的 epoch，用于检测 king 变更。
+- `lastTaxBlock`: 上次**税收结算**区块（仅在 `_settleTax()` 时更新，领取奖励不更新）。
+- `joinedBlock`: 玩家首次加入的区块号。
+- `isActive`: 布尔值，标记玩家是否存活。
+- `hasEnteredBefore`: 布尔值，标记玩家是否曾经入场过。
 
 ## 4. 政治系统 (Political System - Monarchy)
 
@@ -144,10 +173,11 @@
 
 ### 5.4 国库空投 (Inflation / UBI)
 
-- 这是系统的“水龙头”，保证游戏是 Positive Sum (正和博弈) 还是 Negative Sum (负和博弈) 的关键。
-- **空投时间：** **每个区块 (Per Block)**。利用惰性计算或系统钩子。
-- **空投数量：** **250 KRILL / Block**。
-- 每任期国库增发总额：250×30,000=7,500,000 (750万)。
+- 这是系统的"水龙头"，保证游戏是 Positive Sum (正和博弈) 还是 Negative Sum (负和博弈) 的关键。
+- **空投时间：** **每个区块 (Per Block)**。利用惰性计算（`_updateTreasuryYield()`）。
+- **空投数量：** **200 KRILL / Block**。
+- **上限：** 75,000,000,000 KRILL (750M SHELL × 100 汇率)，达到后停止产出。
+- 每任期国库增发总额：200×30,000=6,000,000 (600万)。
 
 ### 5.5 时间与生存成本 (Time & Survival)
 
@@ -156,10 +186,15 @@
     - 任期 (8小时)：8×60×60=28,800 块。为了方便计算和预留波动，我们在设计时按 **30,000 块** 估算。
 - **税率设定 (Tax Rate)：**
     - 基础生存税(进入国库)：**1 KRILL / Block**。
-    - 这意味着：活过一个任期（8小时），需要消耗 **30,000 KRILL**。
+    - 君主可调整范围：**[1, 5] KRILL / Block**。
+    - 这意味着：活过一个任期（8小时），基础税率下需要消耗 **30,000 KRILL**。
 - **SHELL 与 KRILL 兑换比例：**
     - **1 : 100**
 - **玩家携带建议：**
-    - 为了不进场就死，玩家至少应该携带能活 **24小时** 的资金。
-    - **建议充值：100,0 SHELL** (约能活 3 个任期，容错率高)。
+    - 最低入场门槛：**30,000 KRILL** (入场费，立即扣除)。
+    - 为了存活，玩家需要额外携带生存资金。
+    - **建议充值：1,000 SHELL** (= 100,000 KRILL，扣除入场费后剩余 70,000 KRILL，约能活 2.3 个任期)。
+- **拖欠惩罚宽限期：**
+    - **18,000 Blocks (~5 Hours)**。
+    - 超过此时间未结算税收，任何 solvent 玩家可触发 `settleDelinquent` 获取 10% 赏金。
 

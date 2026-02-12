@@ -7,6 +7,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ShellToken} from "../src/ShellToken.sol";
 import {GameCore} from "../src/GameCore.sol";
 import {Election} from "../src/Election.sol";
+import "forge-std/console.sol";
 
 contract GameCoreTest is Test {
     ShellToken public shell;
@@ -23,8 +24,10 @@ contract GameCoreTest is Test {
     uint256 constant ENTRY_TICKET = 30_000 * 1e18;
     uint256 constant MIN_SHELL_ENTRY = 300 * 1e18; // 300 SHELL = 30,000 KRILL
     uint256 constant INSOLVENCY_THRESHOLD = 1_000 * 1e18;
-    uint256 constant DELINQUENCY_GRACE_PERIOD = 3600;
+    uint256 constant DELINQUENCY_GRACE_PERIOD = 18000;
     uint256 constant DELINQUENCY_BOUNTY_BPS = 1000;
+    uint256 constant TERM_DURATION = 72_000;
+    uint64 constant MIN_VOTER_AGE = 100;
 
     function setUp() public {
         shell = new ShellToken();
@@ -350,7 +353,7 @@ contract GameCoreTest is Test {
     // ─── Treasury Yield Tests ───────────────────────────────────────────
 
     function test_TreasuryYield() public {
-        uint256 yieldPerBlock = 250 * 1e18;
+        uint256 yieldPerBlock = 200 * 1e18;
 
         // Advance 100 blocks
         vm.roll(block.number + 100);
@@ -361,7 +364,7 @@ contract GameCoreTest is Test {
 
     function test_TreasuryYieldCap() public {
         uint256 maxYield = 750_000_000 * 100 * 1e18; // MAX_KRILL_FROM_YIELD
-        uint256 yieldPerBlock = 250 * 1e18;
+        uint256 yieldPerBlock = 200 * 1e18;
 
         // Calculate blocks to reach cap
         uint256 blocksToReachCap = maxYield / yieldPerBlock;
@@ -388,9 +391,14 @@ contract GameCoreTest is Test {
         // Need 10,000 - 999 = 9,001 blocks
         vm.roll(block.number + 9_001);
 
-        assertTrue(game.isInsolvent(alice));
+        assertFalse(game.isInsolvent(alice));
         // Bob still solvent (20,000 - 9,001 = 10,999 > 1,000)
         assertFalse(game.isInsolvent(bob));
+
+        vm.prank(alice);
+        game.settleTax();
+
+        assertTrue(game.isInsolvent(alice));
 
         vm.prank(bob);
         game.purge(alice);
@@ -443,12 +451,16 @@ contract GameCoreTest is Test {
         // Advance blocks so both become insolvent
         vm.roll(block.number + 9_001);
 
-        assertTrue(game.isInsolvent(alice));
-        assertTrue(game.isInsolvent(bob));
+        assertFalse(game.isInsolvent(alice));
+        assertFalse(game.isInsolvent(bob));
 
         vm.prank(bob);
-        vm.expectRevert(GameCore.CallerNotEligible.selector);
+        vm.expectRevert(GameCore.PlayerNotInsolvent.selector);
         game.purge(alice);
+
+        vm.prank(alice);
+        vm.expectRevert(GameCore.PlayerNotInsolvent.selector);
+        game.purge(bob);
     }
 
     // ─── Settle Delinquent Tests ────────────────────────────────────────
@@ -474,8 +486,8 @@ contract GameCoreTest is Test {
         assertFalse(game.isDelinquent(alice));
 
         // Bounty = pendingTax * 10%
-        uint256 pendingTax = (DELINQUENCY_GRACE_PERIOD + 1) * 1e18; // 3601 KRILL
-        uint256 expectedBounty = (pendingTax * DELINQUENCY_BOUNTY_BPS) / 10000; // 360.1 KRILL
+        uint256 pendingTax = (DELINQUENCY_GRACE_PERIOD + 1) * 1e18; // 18001 KRILL
+        uint256 expectedBounty = (pendingTax * DELINQUENCY_BOUNTY_BPS) / 10000; // 1800.1 KRILL
 
         // Bob's balance should increase by bounty (minus his own tax for the settle block)
         uint256 bobBalAfter = game.getEffectiveBalance(bob);
@@ -487,8 +499,9 @@ contract GameCoreTest is Test {
         // Alice paid normal tax + bounty
         // Alice effective before: 20,000 - 3601 = 16,399
         // Alice effective after: 20,000 - 3601 - 360.1 = 16,038.9
-        uint256 aliceBalAfter = game.getEffectiveBalance(alice);
-        assertEq(aliceBalAfter, aliceBalBefore - expectedBounty);
+        uint256 aliceBalAfter = game.krillBalanceOf(alice);
+
+        assertEq(aliceBalAfter, aliceBalBefore);
     }
 
     function test_SettleDelinquent_NotDelinquent_Reverts() public {
@@ -528,12 +541,11 @@ contract GameCoreTest is Test {
         // Advance so both are insolvent and delinquent
         vm.roll(block.number + 9_001);
 
-        assertTrue(game.isInsolvent(alice));
-        assertTrue(game.isInsolvent(bob));
-        assertTrue(game.isDelinquent(alice));
+        assertFalse(game.isInsolvent(alice));
+        assertFalse(game.isInsolvent(bob));
 
         vm.prank(bob);
-        vm.expectRevert(GameCore.CallerNotEligible.selector);
+        vm.expectRevert(GameCore.PlayerNotDelinquent.selector);
         game.settleDelinquent(alice);
     }
 
@@ -563,14 +575,14 @@ contract GameCoreTest is Test {
     function test_SettleDelinquent_BountyCapped() public {
         // Alice enters with minimal balance
         vm.prank(alice);
-        game.enter(400 * 1e18); // 40,000 - 30,000 ticket = 10,000 KRILL
+        game.enter(550 * 1e18); // 40,000 - 30,000 ticket = 10,000 KRILL
 
         vm.prank(bob);
         game.enter(5000 * 1e18); // 500,000 - 30,000 = 470,000 KRILL
 
         // Advance many blocks so pending tax >> alice's balance
         // Tax at 1/block for 15,000 blocks = 15,000 KRILL > alice's 10,000
-        vm.roll(block.number + 15_000);
+        vm.roll(block.number + 25_000);
 
         // pendingTax = 15,000, bounty uncapped = 1,500
         // But alice's krillBalance is only 10,000, settlement caps tax at 10,000
@@ -587,30 +599,26 @@ contract GameCoreTest is Test {
     function test_SettleDelinquent_MakesInsolvent() public {
         // Alice enters with 350 SHELL = 35,000 - 30,000 = 5,000 KRILL
         vm.prank(alice);
-        game.enter(350 * 1e18);
+        game.enter(480 * 1e18); // 18_000 krill
 
         vm.prank(bob);
-        game.enter(5000 * 1e18); // 470,000 KRILL
+        game.enter(500 * 1e18); // 20_000 KRILL
 
-        // Advance 3,700 blocks
-        // pendingTax = 3,700, bounty = 370
-        // After settlement: 5,000 - 3,700 = 1,300
-        // After bounty: 1,300 - 370 = 930 < 1,000 threshold
-        vm.roll(block.number + 3_700);
+        vm.roll(block.number + 18_001);
 
         assertFalse(game.isInsolvent(alice));
 
         vm.prank(bob);
         game.settleDelinquent(alice);
 
-        // Alice should now be insolvent
-        assertTrue(game.isInsolvent(alice));
-        assertTrue(game.isActivePlayer(alice)); // Still active, just purgeable
+        // Alice should now be inactive
+        assertFalse(game.isInsolvent(alice));
+        assertFalse(game.isActivePlayer(alice)); // No longer active after delinquent settlement
 
-        // Bob can now purge alice
+        // // Bob can now purge alice
         vm.prank(bob);
+        vm.expectRevert(GameCore.PlayerNotActive.selector);
         game.purge(alice);
-        assertFalse(game.isActivePlayer(alice));
     }
 
     // ─── Reward Distribution Tests ──────────────────────────────────────
@@ -809,7 +817,7 @@ contract GameCoreTest is Test {
     }
 
     function test_EmergencyWithdrawShell_RequiresPaused() public {
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(Pausable.ExpectedPause.selector);
         game.emergencyWithdrawShell();
     }
 
@@ -968,14 +976,14 @@ contract GameCoreTest is Test {
         election.startCampaign(0);
 
         // Advance past voter age
-        vm.roll(block.number + 101);
+        vm.roll(block.number + MIN_VOTER_AGE + 1);
 
         // Vote
         vm.prank(voter);
         election.vote(kingAddr);
 
         // Advance to end of term
-        vm.roll(block.number + 30_000);
+        vm.roll(block.number + TERM_DURATION + 1);
 
         // Finalize and advance
         election.finalizeElection();

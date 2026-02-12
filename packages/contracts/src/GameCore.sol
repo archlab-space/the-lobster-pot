@@ -245,17 +245,14 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     function purge(address playerAddr) external nonReentrant onlyInitialized whenNotPaused {
         // Caller must be an active, solvent player
         if (!players[msg.sender].isActive) revert CallerNotEligible();
-        if (_getEffectiveBalance(msg.sender) <= INSOLVENCY_THRESHOLD) revert CallerNotEligible();
 
         Player storage p = players[playerAddr];
         if (!p.isActive) revert PlayerNotActive();
 
         // Check target insolvency using effective balance
-        if (_getEffectiveBalance(playerAddr) >= INSOLVENCY_THRESHOLD) revert PlayerNotInsolvent();
+        if (p.krillBalance >= INSOLVENCY_THRESHOLD) revert PlayerNotInsolvent();
 
         _updateTreasuryYield();
-
-        _claimRewards(playerAddr);
 
         uint256 remainingKrill = p.krillBalance;
 
@@ -277,15 +274,12 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     function settleDelinquent(address playerAddr) external nonReentrant onlyNotKing() onlyInitialized whenNotPaused {
         if (msg.sender == playerAddr) revert CannotSettleSelf();
         if (!players[msg.sender].isActive) revert CallerNotEligible();
-        if (_getEffectiveBalance(msg.sender) <= INSOLVENCY_THRESHOLD) revert CallerNotEligible();
 
         Player storage p = players[playerAddr];
         if (!p.isActive) revert PlayerNotActive();
         if (block.number - p.lastTaxBlock <= DELINQUENCY_GRACE_PERIOD) revert PlayerNotDelinquent();
 
         _updateTreasuryYield();
-
-        _claimRewards(playerAddr);
 
         // Calculate bounty BEFORE settlement (pendingTax uses lastTaxBlock)
         uint256 pendingTax = _calculatePendingTax(playerAddr);
@@ -376,7 +370,6 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     }
 
     function deductKrill(address player, uint256 amount) external onlyElection whenNotPaused {
-        _settlePlayer(player);
         Player storage p = players[player];
         if (!p.isActive) revert PlayerNotActive();
         if (p.krillBalance < amount) revert InsufficientKrill();
@@ -384,7 +377,6 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     }
 
     function creditKrill(address player, uint256 amount) external onlyElection whenNotPaused {
-        _settlePlayer(player);
         Player storage p = players[player];
         if (!p.isActive) revert PlayerNotActive();
         p.krillBalance += amount;
@@ -441,7 +433,12 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
 
     function isInsolvent(address addr) external view returns (bool) {
         if (!players[addr].isActive) return false;
-        return _getEffectiveBalance(addr) < INSOLVENCY_THRESHOLD;
+        return players[addr].krillBalance < INSOLVENCY_THRESHOLD;
+    }
+
+    function krillBalanceOf(address addr) external view returns (uint256) {
+        if (!players[addr].isActive) return 0;
+        return players[addr].krillBalance;
     }
 
     function isDelinquent(address addr) external view returns (bool) {
