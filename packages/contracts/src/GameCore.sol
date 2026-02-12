@@ -31,6 +31,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         uint256 krillBalance;
         uint256 rewardDebt;
         uint256 voterRewardDebt;
+        uint256 voterRewardEpochSnapshot;
         uint64 lastTaxBlock;
         uint64 joinedBlock;
         bool isActive;
@@ -163,6 +164,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         p.hasEnteredBefore = true;
         p.rewardDebt = accRewardPerPlayer;
         p.voterRewardDebt = accVoterRewardPerVoter;
+        p.voterRewardEpochSnapshot = voterRewardEpoch;
 
         activePlayers++;
 
@@ -503,6 +505,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
             p.krillBalance += voterPending;
         }
         p.voterRewardDebt = accVoterRewardPerVoter;
+        p.voterRewardEpochSnapshot = voterRewardEpoch;
     }
 
     function _settlePlayer(address addr) internal {
@@ -569,8 +572,9 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
             return 0;
         }
 
-        if (accVoterRewardPerVoter <= p.voterRewardDebt) return 0;
-        return (accVoterRewardPerVoter - p.voterRewardDebt) / REWARD_PRECISION;
+        uint256 debt = p.voterRewardEpochSnapshot == voterRewardEpoch ? p.voterRewardDebt : 0;
+        if (accVoterRewardPerVoter <= debt) return 0;
+        return (accVoterRewardPerVoter - debt) / REWARD_PRECISION;
     }
 
     function _deactivatePlayer(address addr) internal {
@@ -579,6 +583,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         p.isActive = false;
         p.rewardDebt = 0;
         p.voterRewardDebt = 0;
+        p.voterRewardEpochSnapshot = 0;
         activePlayers--;
     }
 }
