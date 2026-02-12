@@ -88,6 +88,7 @@ contract GameCore is ReentrancyGuard {
     error PlayerNotInsolvent();
     error ZeroAmount();
     error BelowEntryTicket();
+    error CallerNotEligible();
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier onlyKing() {
@@ -141,7 +142,8 @@ contract GameCore is ReentrancyGuard {
 
         _updateTreasuryYield();
 
-        p.krillBalance = krillAmount;
+        p.krillBalance = krillAmount - ENTRY_TICKET;
+        treasury += ENTRY_TICKET;
         p.lastInteractionBlock = uint64(block.number);
         p.joinedBlock = uint64(block.number);
         p.isActive = true;
@@ -225,34 +227,29 @@ contract GameCore is ReentrancyGuard {
     function purge(address playerAddr) external nonReentrant onlyInitialized {
         _updateTreasuryYield();
 
+        // Caller must be an active, solvent player
+        if (!players[msg.sender].isActive) revert CallerNotEligible();
+        if (_getEffectiveBalance(msg.sender) <= INSOLVENCY_THRESHOLD) revert CallerNotEligible();
+
         Player storage p = players[playerAddr];
         if (!p.isActive) revert PlayerNotActive();
 
-        // Apply pending tax to check true insolvency
-        uint256 pendingTax = _calculatePendingTax(playerAddr);
-        uint256 effectiveBal;
-        if (p.krillBalance > pendingTax) {
-            effectiveBal = p.krillBalance - pendingTax;
-        }
-        // effectiveBal is 0 if tax >= balance
+        // Check target insolvency using effective balance
+        if (_getEffectiveBalance(playerAddr) >= INSOLVENCY_THRESHOLD) revert PlayerNotInsolvent();
 
-        if (effectiveBal >= INSOLVENCY_THRESHOLD) revert PlayerNotInsolvent();
+        uint256 remainingKrill = p.krillBalance;
 
-        uint256 remainingKrill = p.krillBalance; // Use raw balance for distribution
-
-        // 50% to caller as SHELL
+        // 50% to caller as KRILL
         uint256 callerKrill = remainingKrill / 2;
-        uint256 callerShell = callerKrill / EXCHANGE_RATE;
-
-        // 50% to treasury as KRILL
+        // 50% to treasury
         uint256 treasuryKrill = remainingKrill - callerKrill;
         treasury += treasuryKrill;
 
         _deactivatePlayer(playerAddr);
 
-        if (callerShell > 0) {
-            shellToken.safeTransfer(msg.sender, callerShell);
-        }
+        // Settle caller then credit KRILL
+        _settlePlayer(msg.sender);
+        players[msg.sender].krillBalance += callerKrill;
 
         emit PlayerPurged(playerAddr, msg.sender, remainingKrill);
     }
@@ -345,16 +342,7 @@ contract GameCore is ReentrancyGuard {
     // ─── View Functions ─────────────────────────────────────────────────
 
     function getEffectiveBalance(address addr) external view returns (uint256) {
-        Player storage p = players[addr];
-        if (!p.isActive) return 0;
-
-        uint256 pendingTax = _calculatePendingTax(addr);
-        uint256 pending = _pendingRewardFor(addr);
-        uint256 voterPending = _pendingVoterRewardFor(addr);
-
-        uint256 balance = p.krillBalance + pending + voterPending;
-        if (balance <= pendingTax) return 0;
-        return balance - pendingTax;
+        return _getEffectiveBalance(addr);
     }
 
     function pendingReward(address addr) external view returns (uint256) {
@@ -382,16 +370,8 @@ contract GameCore is ReentrancyGuard {
     }
 
     function isInsolvent(address addr) external view returns (bool) {
-        Player storage p = players[addr];
-        if (!p.isActive) return false;
-
-        uint256 pendingTax = _calculatePendingTax(addr);
-        uint256 pending = _pendingRewardFor(addr);
-        uint256 voterPending = _pendingVoterRewardFor(addr);
-
-        uint256 balance = p.krillBalance + pending + voterPending;
-        if (balance <= pendingTax) return true;
-        return (balance - pendingTax) < INSOLVENCY_THRESHOLD;
+        if (!players[addr].isActive) return false;
+        return _getEffectiveBalance(addr) < INSOLVENCY_THRESHOLD;
     }
 
     function isActivePlayer(address addr) external view returns (bool) {
@@ -403,6 +383,19 @@ contract GameCore is ReentrancyGuard {
     }
 
     // ─── Internal Functions ─────────────────────────────────────────────
+
+    function _getEffectiveBalance(address addr) internal view returns (uint256) {
+        Player storage p = players[addr];
+        if (!p.isActive) return 0;
+
+        uint256 pendingTax = _calculatePendingTax(addr);
+        uint256 pending = _pendingRewardFor(addr);
+        uint256 voterPending = _pendingVoterRewardFor(addr);
+
+        uint256 balance = p.krillBalance + pending + voterPending;
+        if (balance <= pendingTax) return 0;
+        return balance - pendingTax;
+    }
 
     function _settlePlayer(address addr) internal {
         _updateTreasuryYield();

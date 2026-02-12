@@ -123,14 +123,14 @@ contract ElectionTest is Test {
 
         // Create a player with minimal balance that will be below threshold after tax
         address poorPlayer = address(0x999);
-        shell.transfer(poorPlayer, 300 * 1e18);
+        shell.transfer(poorPlayer, 500 * 1e18);
         vm.prank(poorPlayer);
         shell.approve(address(game), type(uint256).max);
         vm.prank(poorPlayer);
-        game.enter(300 * 1e18); // 30,000 KRILL
+        game.enter(500 * 1e18); // 50,000 - 30,000 ticket = 20,000 KRILL
 
         // Advance many blocks so tax eats balance below VOTER_MIN_BALANCE
-        vm.roll(block.number + 29_100);
+        vm.roll(block.number + 19_100);
 
         vm.prank(poorPlayer);
         vm.expectRevert(Election.InsufficientBalance.selector);

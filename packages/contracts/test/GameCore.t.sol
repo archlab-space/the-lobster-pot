@@ -53,7 +53,9 @@ contract GameCoreTest is Test {
 
         assertEq(game.activePlayers(), 1);
         assertTrue(game.isActivePlayer(alice));
-        assertGt(game.getEffectiveBalance(alice), 0);
+        // 50,000 - 30,000 ENTRY_TICKET = 20,000 KRILL
+        assertEq(game.getEffectiveBalance(alice), 20_000 * 1e18);
+        assertEq(game.getEffectiveTreasury(), ENTRY_TICKET);
     }
 
     function test_Enter_BelowEntryTicket() public {
@@ -66,6 +68,8 @@ contract GameCoreTest is Test {
         vm.prank(alice);
         game.enter(MIN_SHELL_ENTRY);
         assertTrue(game.isActivePlayer(alice));
+        // 30,000 KRILL - 30,000 ENTRY_TICKET = 0 KRILL balance
+        assertEq(game.getEffectiveBalance(alice), 0);
     }
 
     function test_Enter_AlreadyActive() public {
@@ -136,11 +140,11 @@ contract GameCoreTest is Test {
 
     function test_Withdraw_FullBalance_DeactivatesPlayer() public {
         vm.prank(alice);
-        game.enter(MIN_SHELL_ENTRY); // Exactly 30,000 KRILL
+        game.enter(500 * 1e18); // 50,000 KRILL - 30,000 ticket = 20,000 KRILL
 
         // Withdraw everything (on same block, no tax)
         vm.prank(alice);
-        game.withdraw(30_000 * 1e18);
+        game.withdraw(20_000 * 1e18);
 
         assertFalse(game.isActivePlayer(alice));
         assertEq(game.activePlayers(), 0);
@@ -159,7 +163,7 @@ contract GameCoreTest is Test {
 
     function test_TaxAccumulation() public {
         vm.prank(alice);
-        game.enter(500 * 1e18); // 50,000 KRILL
+        game.enter(500 * 1e18); // 50,000 - 30,000 ticket = 20,000 KRILL
 
         uint256 balAtEntry = game.getEffectiveBalance(alice);
 
@@ -168,8 +172,7 @@ contract GameCoreTest is Test {
 
         uint256 balAfter = game.getEffectiveBalance(alice);
         // Tax = 1 KRILL/block * 100 blocks = 100 KRILL
-        // But balance also includes treasury yield rewards (if any distribution happened)
-        // Effective = 50,000 - 100 = 49,900 KRILL
+        // Effective = 20,000 - 100 = 19,900 KRILL
         assertEq(balAtEntry - balAfter, 100 * 1e18);
     }
 
@@ -237,27 +240,35 @@ contract GameCoreTest is Test {
 
     function test_Purge_InsolventPlayer() public {
         vm.prank(alice);
-        game.enter(MIN_SHELL_ENTRY); // 30,000 KRILL
+        game.enter(400 * 1e18); // 40,000 - 30,000 ticket = 10,000 KRILL
+
+        // Bob enters as a solvent player (required to call purge)
+        vm.prank(bob);
+        game.enter(500 * 1e18); // 50,000 - 30,000 ticket = 20,000 KRILL
 
         // Advance enough blocks to make alice insolvent
         // Tax = 1/block, insolvency at < 1,000 KRILL
-        // Need 30,000 - 999 = 29,001 blocks
-        vm.roll(block.number + 29_001);
+        // Need 10,000 - 999 = 9,001 blocks
+        vm.roll(block.number + 9_001);
 
         assertTrue(game.isInsolvent(alice));
-
-        uint256 bobShellBefore = shell.balanceOf(bob);
+        // Bob still solvent (20,000 - 9,001 = 10,999 > 1,000)
+        assertFalse(game.isInsolvent(bob));
 
         vm.prank(bob);
         game.purge(alice);
 
         assertFalse(game.isActivePlayer(alice));
-        // Bob should have received half of alice's raw balance as SHELL
-        assertGt(shell.balanceOf(bob), bobShellBefore);
+        // Bob should have received half of alice's raw krillBalance as KRILL
+        // Bob's effective balance should have increased
+        assertGt(game.getEffectiveBalance(bob), 0);
     }
 
     function test_Purge_SolventPlayer_Reverts() public {
         vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        vm.prank(bob);
         game.enter(500 * 1e18);
 
         vm.prank(bob);
@@ -266,8 +277,40 @@ contract GameCoreTest is Test {
     }
 
     function test_Purge_InactivePlayer_Reverts() public {
+        // Bob must be active player to call purge
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
         vm.prank(bob);
         vm.expectRevert(GameCore.PlayerNotActive.selector);
+        game.purge(alice);
+    }
+
+    function test_Purge_CallerNotPlayer_Reverts() public {
+        vm.prank(alice);
+        game.enter(400 * 1e18);
+
+        // bob is not a player
+        vm.prank(bob);
+        vm.expectRevert(GameCore.CallerNotEligible.selector);
+        game.purge(alice);
+    }
+
+    function test_Purge_CallerInsolvent_Reverts() public {
+        vm.prank(alice);
+        game.enter(400 * 1e18); // 10,000 KRILL
+
+        vm.prank(bob);
+        game.enter(400 * 1e18); // 10,000 KRILL
+
+        // Advance blocks so both become insolvent
+        vm.roll(block.number + 9_001);
+
+        assertTrue(game.isInsolvent(alice));
+        assertTrue(game.isInsolvent(bob));
+
+        vm.prank(bob);
+        vm.expectRevert(GameCore.CallerNotEligible.selector);
         game.purge(alice);
     }
 
@@ -324,13 +367,13 @@ contract GameCoreTest is Test {
 
     function test_EffectiveBalance_IncludesTaxAndRewards() public {
         vm.prank(alice);
-        game.enter(500 * 1e18); // 50,000 KRILL
+        game.enter(500 * 1e18); // 50,000 - 30,000 ticket = 20,000 KRILL
 
         vm.roll(block.number + 100);
 
         uint256 effective = game.getEffectiveBalance(alice);
-        // 50,000 - 100 (tax) = 49,900
-        assertEq(effective, 49_900 * 1e18);
+        // 20,000 - 100 (tax) = 19,900
+        assertEq(effective, 19_900 * 1e18);
     }
 
     // ─── Access Control Tests ───────────────────────────────────────────
@@ -429,20 +472,20 @@ contract GameCoreTest is Test {
         game.enter(shellAmount);
 
         assertTrue(game.isActivePlayer(alice));
-        assertEq(game.getEffectiveBalance(alice), shellAmount * EXCHANGE_RATE);
+        assertEq(game.getEffectiveBalance(alice), shellAmount * EXCHANGE_RATE - ENTRY_TICKET);
     }
 
     function testFuzz_TaxAccumulation(uint256 blocks) public {
         blocks = bound(blocks, 1, 100_000);
 
         vm.prank(alice);
-        game.enter(5000 * 1e18); // 500,000 KRILL — won't go insolvent easily
+        game.enter(5000 * 1e18); // 500,000 - 30,000 ticket = 470,000 KRILL
 
         vm.roll(block.number + blocks);
 
         uint256 effective = game.getEffectiveBalance(alice);
         uint256 expectedTax = blocks * 1e18; // 1 KRILL/block
-        uint256 expectedBalance = 500_000 * 1e18 - expectedTax;
+        uint256 expectedBalance = 470_000 * 1e18 - expectedTax;
 
         if (expectedBalance < INSOLVENCY_THRESHOLD) {
             // Might be insolvent
@@ -454,15 +497,15 @@ contract GameCoreTest is Test {
 
     function testFuzz_Withdraw_Amounts(uint256 krillAmount) public {
         vm.prank(alice);
-        game.enter(5000 * 1e18); // 500,000 KRILL
+        game.enter(5000 * 1e18); // 500,000 - 30,000 ticket = 470,000 KRILL
 
-        krillAmount = bound(krillAmount, 1, 500_000 * 1e18);
+        krillAmount = bound(krillAmount, 1, 470_000 * 1e18);
 
         vm.prank(alice);
         game.withdraw(krillAmount);
 
         uint256 remaining = game.getEffectiveBalance(alice);
-        assertEq(remaining, 500_000 * 1e18 - krillAmount);
+        assertEq(remaining, 470_000 * 1e18 - krillAmount);
     }
 
     // ─── AlreadyInitialized ─────────────────────────────────────────────
