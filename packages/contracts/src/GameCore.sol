@@ -40,7 +40,6 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
 
     // ─── State ──────────────────────────────────────────────────────────
     IERC20 public immutable shellToken;
-    address public king;
     IElection public election;
     bool public initialized;
     uint256 public gameStartBlock;
@@ -61,8 +60,8 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     // Reward distribution (MasterChef pattern — 1 share per active player)
     uint256 public accRewardPerPlayer;
 
-    // Voter reward distribution (epoch-based)
-    uint256 public voterRewardEpoch;
+    // Voter reward distribution (term-based)
+    uint256 public lastVoterRewardTerm;
     uint256 public accVoterRewardPerVoter;
 
     // ─── Events ─────────────────────────────────────────────────────────
@@ -76,7 +75,6 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     event VoterRewardDistributed(uint256 amount);
     event RewardClaimed(address indexed player, uint256 amount);
     event VoterRewardClaimed(address indexed player, uint256 amount);
-    event KingChanged(address indexed oldKing, address indexed newKing);
     event DelinquentSettled(address indexed player, address indexed settler, uint256 bounty);
     event GameInitialized(address indexed election, uint256 startBlock);
 
@@ -101,12 +99,12 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier onlyKing() {
-        if (msg.sender != king) revert NotKing();
+        if (msg.sender != king()) revert NotKing();
         _;
     }
 
     modifier onlyNotKing() {
-        if (msg.sender == king) revert IsKing();
+        if (msg.sender == king()) revert IsKing();
         _;
     }
 
@@ -164,7 +162,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         p.hasEnteredBefore = true;
         p.rewardDebt = accRewardPerPlayer;
         p.voterRewardDebt = accVoterRewardPerVoter;
-        p.voterRewardEpochSnapshot = voterRewardEpoch;
+        p.voterRewardEpochSnapshot = election.currentTerm();
 
         activePlayers++;
 
@@ -347,6 +345,15 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         _updateTreasuryYield();
         if (amount > treasury) revert InsufficientTreasury();
 
+        uint256 currentElectionTerm = election.currentTerm();
+        if (currentElectionTerm == 0) revert ZeroAmount(); // No voters in term 0
+
+        // If term changed since last distribution, reset accumulator
+        if (currentElectionTerm != lastVoterRewardTerm) {
+            accVoterRewardPerVoter = 0;
+            lastVoterRewardTerm = currentElectionTerm;
+        }
+
         uint256 voterCount = election.getCurrentKingVoterCount();
         if (voterCount == 0) revert ZeroAmount();
 
@@ -357,17 +364,6 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     }
 
     // ─── Election Functions ─────────────────────────────────────────────
-
-    function setKing(address newKing) external onlyElection whenNotPaused {
-        address oldKing = king;
-        king = newKing;
-
-        // New epoch for voter rewards — previous epoch rewards forfeited
-        voterRewardEpoch++;
-        accVoterRewardPerVoter = 0;
-
-        emit KingChanged(oldKing, newKing);
-    }
 
     function deductKrill(address player, uint256 amount) external onlyElection whenNotPaused {
         Player storage p = players[player];
@@ -402,6 +398,10 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     }
 
     // ─── View Functions ─────────────────────────────────────────────────
+
+    function king() public view returns (address) {
+        return election.getCurrentKing();
+    }
 
     function getEffectiveBalance(address addr) external view returns (uint256) {
         return _getEffectiveBalance(addr);
@@ -502,7 +502,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
             p.krillBalance += voterPending;
         }
         p.voterRewardDebt = accVoterRewardPerVoter;
-        p.voterRewardEpochSnapshot = voterRewardEpoch;
+        p.voterRewardEpochSnapshot = election.currentTerm(); // Store current term
     }
 
     function _settlePlayer(address addr) internal {
@@ -562,14 +562,17 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         Player storage p = players[addr];
         if (!p.isActive) return 0;
 
-        // Check if player voted for current king
+        uint256 currentElectionTerm = election.currentTerm();
+
+        // Check if player voted for current king in the previous term
         try election.didVoteForCurrentKing(addr) returns (bool voted) {
             if (!voted) return 0;
         } catch {
             return 0;
         }
 
-        uint256 debt = p.voterRewardEpochSnapshot == voterRewardEpoch ? p.voterRewardDebt : 0;
+        // Rewards reset when term changes
+        uint256 debt = (p.voterRewardEpochSnapshot == currentElectionTerm) ? p.voterRewardDebt : 0;
         if (accVoterRewardPerVoter <= debt) return 0;
         return (accVoterRewardPerVoter - debt) / REWARD_PRECISION;
     }
