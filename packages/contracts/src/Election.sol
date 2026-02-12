@@ -6,7 +6,7 @@ import {IGameCore} from "./interfaces/IGameCore.sol";
 
 contract Election is ReentrancyGuard {
     // ─── Constants ──────────────────────────────────────────────────────
-    uint256 public constant TERM_DURATION = 30_000;
+    uint256 public constant TERM_DURATION = 72_000; // ~ 8 hours
     uint256 public constant REGISTRATION_FEE = 1_000_000 * 1e18;
     uint256 public constant VOTER_MIN_BALANCE = 1_000 * 1e18;
     uint64 public constant MIN_VOTER_AGE = 100; // blocks

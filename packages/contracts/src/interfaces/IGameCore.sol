@@ -13,4 +13,10 @@ interface IGameCore {
     function activePlayers() external view returns (uint256);
     function treasury() external view returns (uint256);
     function creditTreasury(uint256 amount) external;
+    function settleDelinquent(address playerAddr) external;
+    function isDelinquent(address addr) external view returns (bool);
+    function settleTax() external;
+    function pause() external;
+    function unpause() external;
+    function emergencyWithdrawShell() external;
 }

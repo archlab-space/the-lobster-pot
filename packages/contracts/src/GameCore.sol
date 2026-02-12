@@ -4,9 +4,11 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IElection} from "./interfaces/IElection.sol";
 
-contract GameCore is ReentrancyGuard {
+contract GameCore is ReentrancyGuard, Ownable, Pausable {
     using SafeERC20 for IERC20;
 
     // ─── Constitution Constants ─────────────────────────────────────────
@@ -16,10 +18,12 @@ contract GameCore is ReentrancyGuard {
     uint256 public constant EXIT_TREASURY_BPS = 1000;
     uint256 public constant ENTRY_TICKET = 30_000 * 1e18;
     uint256 public constant INSOLVENCY_THRESHOLD = 1_000 * 1e18;
-    uint256 public constant YIELD_PER_BLOCK = 250 * 1e18;
+    uint256 public constant YIELD_PER_BLOCK = 200 * 1e18;
     uint256 public constant MIN_TAX_RATE = 1 * 1e18;
     uint256 public constant MAX_TAX_RATE = 5 * 1e18;
     uint256 public constant MAX_KRILL_FROM_YIELD = 750_000_000 * EXCHANGE_RATE * 1e18;
+    uint256 public constant DELINQUENCY_GRACE_PERIOD = 18000; // ~2 hour
+    uint256 public constant DELINQUENCY_BOUNTY_BPS = 1000;   // 10% of pending tax
     uint256 internal constant REWARD_PRECISION = 1e18;
 
     // ─── Player Struct ──────────────────────────────────────────────────
@@ -27,7 +31,7 @@ contract GameCore is ReentrancyGuard {
         uint256 krillBalance;
         uint256 rewardDebt;
         uint256 voterRewardDebt;
-        uint64 lastInteractionBlock;
+        uint64 lastTaxBlock;
         uint64 joinedBlock;
         bool isActive;
         bool hasEnteredBefore;
@@ -72,12 +76,14 @@ contract GameCore is ReentrancyGuard {
     event RewardClaimed(address indexed player, uint256 amount);
     event VoterRewardClaimed(address indexed player, uint256 amount);
     event KingChanged(address indexed oldKing, address indexed newKing);
+    event DelinquentSettled(address indexed player, address indexed settler, uint256 bounty);
     event GameInitialized(address indexed election, uint256 startBlock);
 
     // ─── Errors ─────────────────────────────────────────────────────────
     error AlreadyInitialized();
     error NotInitialized();
     error NotKing();
+    error IsKing();
     error NotElection();
     error PlayerNotActive();
     error PlayerAlreadyActive();
@@ -89,10 +95,17 @@ contract GameCore is ReentrancyGuard {
     error ZeroAmount();
     error BelowEntryTicket();
     error CallerNotEligible();
+    error PlayerNotDelinquent();
+    error CannotSettleSelf();
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier onlyKing() {
         if (msg.sender != king) revert NotKing();
+        _;
+    }
+
+    modifier onlyNotKing() {
+        if (msg.sender == king) revert IsKing();
         _;
     }
 
@@ -112,7 +125,7 @@ contract GameCore is ReentrancyGuard {
     }
 
     // ─── Constructor ────────────────────────────────────────────────────
-    constructor(address _shellToken) {
+    constructor(address _shellToken) Ownable(msg.sender) {
         shellToken = IERC20(_shellToken);
         taxRate = MIN_TAX_RATE;
         previousTaxRate = MIN_TAX_RATE;
@@ -131,7 +144,7 @@ contract GameCore is ReentrancyGuard {
 
     // ─── Player Functions ───────────────────────────────────────────────
 
-    function enter(uint256 shellAmount) external nonReentrant onlyInitialized {
+    function enter(uint256 shellAmount) external nonReentrant onlyInitialized whenNotPaused {
         Player storage p = players[msg.sender];
         if (p.isActive) revert PlayerAlreadyActive();
 
@@ -144,7 +157,7 @@ contract GameCore is ReentrancyGuard {
 
         p.krillBalance = krillAmount - ENTRY_TICKET;
         treasury += ENTRY_TICKET;
-        p.lastInteractionBlock = uint64(block.number);
+        p.lastTaxBlock = uint64(block.number);
         p.joinedBlock = uint64(block.number);
         p.isActive = true;
         p.hasEnteredBefore = true;
@@ -156,7 +169,7 @@ contract GameCore is ReentrancyGuard {
         emit PlayerEntered(msg.sender, shellAmount, krillAmount);
     }
 
-    function deposit(uint256 shellAmount) external nonReentrant onlyInitialized settlePlayer(msg.sender) {
+    function deposit(uint256 shellAmount) external nonReentrant onlyInitialized whenNotPaused settlePlayer(msg.sender) {
         if (shellAmount == 0) revert ZeroAmount();
         Player storage p = players[msg.sender];
         if (!p.isActive) revert PlayerNotActive();
@@ -169,7 +182,9 @@ contract GameCore is ReentrancyGuard {
         emit PlayerDeposited(msg.sender, shellAmount, krillAmount);
     }
 
-    function withdraw(uint256 krillAmount) external nonReentrant onlyInitialized settlePlayer(msg.sender) {
+    function withdraw(uint256 krillAmount) external nonReentrant onlyInitialized whenNotPaused settlePlayer(msg.sender) {
+        _claimRewards(msg.sender);
+
         if (krillAmount == 0) revert ZeroAmount();
         Player storage p = players[msg.sender];
         if (!p.isActive) revert PlayerNotActive();
@@ -209,24 +224,23 @@ contract GameCore is ReentrancyGuard {
         emit PlayerWithdrew(msg.sender, krillAmount, shellOut);
     }
 
-    function claimReward() external nonReentrant onlyInitialized settlePlayer(msg.sender) {
+    function settleTax() external nonReentrant onlyInitialized whenNotPaused {
         Player storage p = players[msg.sender];
         if (!p.isActive) revert PlayerNotActive();
-        // Reward already settled in _settlePlayer, nothing extra needed
-        // The settlement applies pending rewards to krillBalance
+        _updateTreasuryYield();
+        _settleTax(msg.sender);
     }
 
-    function claimVoterReward() external nonReentrant onlyInitialized settlePlayer(msg.sender) {
+    function claimReward() external nonReentrant onlyInitialized whenNotPaused {
         Player storage p = players[msg.sender];
         if (!p.isActive) revert PlayerNotActive();
-        // Voter reward settled in _settlePlayer
+        _updateTreasuryYield();
+        _claimRewards(msg.sender);
     }
 
     // ─── Purge ──────────────────────────────────────────────────────────
 
-    function purge(address playerAddr) external nonReentrant onlyInitialized {
-        _updateTreasuryYield();
-
+    function purge(address playerAddr) external nonReentrant onlyInitialized whenNotPaused {
         // Caller must be an active, solvent player
         if (!players[msg.sender].isActive) revert CallerNotEligible();
         if (_getEffectiveBalance(msg.sender) <= INSOLVENCY_THRESHOLD) revert CallerNotEligible();
@@ -236,6 +250,10 @@ contract GameCore is ReentrancyGuard {
 
         // Check target insolvency using effective balance
         if (_getEffectiveBalance(playerAddr) >= INSOLVENCY_THRESHOLD) revert PlayerNotInsolvent();
+
+        _updateTreasuryYield();
+
+        _claimRewards(playerAddr);
 
         uint256 remainingKrill = p.krillBalance;
 
@@ -247,16 +265,53 @@ contract GameCore is ReentrancyGuard {
 
         _deactivatePlayer(playerAddr);
 
-        // Settle caller then credit KRILL
-        _settlePlayer(msg.sender);
         players[msg.sender].krillBalance += callerKrill;
 
         emit PlayerPurged(playerAddr, msg.sender, remainingKrill);
     }
 
+    // ─── Settle Delinquent ──────────────────────────────────────────────
+
+    function settleDelinquent(address playerAddr) external nonReentrant onlyNotKing() onlyInitialized whenNotPaused {
+        if (msg.sender == playerAddr) revert CannotSettleSelf();
+        if (!players[msg.sender].isActive) revert CallerNotEligible();
+        if (_getEffectiveBalance(msg.sender) <= INSOLVENCY_THRESHOLD) revert CallerNotEligible();
+
+        Player storage p = players[playerAddr];
+        if (!p.isActive) revert PlayerNotActive();
+        if (block.number - p.lastTaxBlock <= DELINQUENCY_GRACE_PERIOD) revert PlayerNotDelinquent();
+
+        _updateTreasuryYield();
+
+        _claimRewards(playerAddr);
+
+        // Calculate bounty BEFORE settlement (pendingTax uses lastTaxBlock)
+        uint256 pendingTax = _calculatePendingTax(playerAddr);
+        if (pendingTax > p.krillBalance) {
+            pendingTax = p.krillBalance;
+        }
+
+        uint256 bounty = (pendingTax * DELINQUENCY_BOUNTY_BPS) / 10000;
+
+        p.krillBalance -= pendingTax;
+
+        players[msg.sender].krillBalance += bounty;
+        
+        treasury += (pendingTax - bounty);
+        
+        p.lastTaxBlock = uint64(block.number);
+
+        // If player balance drops below insolvency, deactivate
+        if (p.krillBalance < INSOLVENCY_THRESHOLD) {
+            _deactivatePlayer(playerAddr);
+        }
+
+        emit DelinquentSettled(playerAddr, msg.sender, bounty);
+    }
+
     // ─── King Functions ─────────────────────────────────────────────────
 
-    function setTaxRate(uint256 newRate) external onlyKing onlyInitialized {
+    function setTaxRate(uint256 newRate) external onlyKing onlyInitialized whenNotPaused {
         if (newRate < MIN_TAX_RATE || newRate > MAX_TAX_RATE) revert InvalidTaxRate();
 
         _updateTreasuryYield();
@@ -268,14 +323,12 @@ contract GameCore is ReentrancyGuard {
         emit TaxRateChanged(previousTaxRate, newRate);
     }
 
-    function distributeToAddress(address to, uint256 amount) external onlyKing onlyInitialized {
+    function distributeToAddress(address to, uint256 amount) external onlyKing onlyInitialized whenNotPaused {
         _updateTreasuryYield();
         if (amount > treasury) revert InsufficientTreasury();
 
         Player storage p = players[to];
         if (!p.isActive) revert PlayerNotActive();
-
-        _settlePlayer(to);
 
         treasury -= amount;
         p.krillBalance += amount;
@@ -283,7 +336,7 @@ contract GameCore is ReentrancyGuard {
         emit TreasuryDistribution(to, amount);
     }
 
-    function distributeToAllPlayers(uint256 amount) external onlyKing onlyInitialized {
+    function distributeToAllPlayers(uint256 amount) external onlyKing onlyInitialized whenNotPaused {
         _updateTreasuryYield();
         if (amount > treasury) revert InsufficientTreasury();
         if (activePlayers == 0) revert ZeroAmount();
@@ -294,7 +347,7 @@ contract GameCore is ReentrancyGuard {
         emit RewardDistributed(amount);
     }
 
-    function distributeToVoters(uint256 amount) external onlyKing onlyInitialized {
+    function distributeToVoters(uint256 amount) external onlyKing onlyInitialized whenNotPaused {
         _updateTreasuryYield();
         if (amount > treasury) revert InsufficientTreasury();
 
@@ -309,7 +362,7 @@ contract GameCore is ReentrancyGuard {
 
     // ─── Election Functions ─────────────────────────────────────────────
 
-    function setKing(address newKing) external onlyElection {
+    function setKing(address newKing) external onlyElection whenNotPaused {
         address oldKing = king;
         king = newKing;
 
@@ -320,7 +373,7 @@ contract GameCore is ReentrancyGuard {
         emit KingChanged(oldKing, newKing);
     }
 
-    function deductKrill(address player, uint256 amount) external onlyElection {
+    function deductKrill(address player, uint256 amount) external onlyElection whenNotPaused {
         _settlePlayer(player);
         Player storage p = players[player];
         if (!p.isActive) revert PlayerNotActive();
@@ -328,15 +381,30 @@ contract GameCore is ReentrancyGuard {
         p.krillBalance -= amount;
     }
 
-    function creditKrill(address player, uint256 amount) external onlyElection {
+    function creditKrill(address player, uint256 amount) external onlyElection whenNotPaused {
         _settlePlayer(player);
         Player storage p = players[player];
         if (!p.isActive) revert PlayerNotActive();
         p.krillBalance += amount;
     }
 
-    function creditTreasury(uint256 amount) external onlyElection {
+    function creditTreasury(uint256 amount) external onlyElection whenNotPaused {
         treasury += amount;
+    }
+
+    // ─── Admin Functions ──────────────────────────────────────────────────
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    function emergencyWithdrawShell() external onlyOwner whenPaused {
+        uint256 balance = shellToken.balanceOf(address(this));
+        shellToken.safeTransfer(owner(), balance);
     }
 
     // ─── View Functions ─────────────────────────────────────────────────
@@ -374,6 +442,12 @@ contract GameCore is ReentrancyGuard {
         return _getEffectiveBalance(addr) < INSOLVENCY_THRESHOLD;
     }
 
+    function isDelinquent(address addr) external view returns (bool) {
+        Player storage p = players[addr];
+        if (!p.isActive) return false;
+        return block.number - p.lastTaxBlock > DELINQUENCY_GRACE_PERIOD;
+    }
+
     function isActivePlayer(address addr) external view returns (bool) {
         return players[addr].isActive;
     }
@@ -397,13 +471,10 @@ contract GameCore is ReentrancyGuard {
         return balance - pendingTax;
     }
 
-    function _settlePlayer(address addr) internal {
-        _updateTreasuryYield();
-
+    function _settleTax(address addr) internal {
         Player storage p = players[addr];
         if (!p.isActive) return;
 
-        // Apply pending tax
         uint256 pendingTax = _calculatePendingTax(addr);
         if (pendingTax > 0) {
             if (pendingTax >= p.krillBalance) {
@@ -414,29 +485,37 @@ contract GameCore is ReentrancyGuard {
                 treasury += pendingTax;
             }
         }
+        p.lastTaxBlock = uint64(block.number);
+    }
 
-        // Apply pending rewards
+    function _claimRewards(address addr) internal {
+        Player storage p = players[addr];
+        if (!p.isActive) return;
+
         uint256 pending = _pendingRewardFor(addr);
         if (pending > 0) {
             p.krillBalance += pending;
         }
         p.rewardDebt = accRewardPerPlayer;
 
-        // Apply pending voter rewards
         uint256 voterPending = _pendingVoterRewardFor(addr);
         if (voterPending > 0) {
             p.krillBalance += voterPending;
         }
         p.voterRewardDebt = accVoterRewardPerVoter;
+    }
 
-        p.lastInteractionBlock = uint64(block.number);
+    function _settlePlayer(address addr) internal {
+        _updateTreasuryYield();
+        _claimRewards(addr);
+        _settleTax(addr);
     }
 
     function _calculatePendingTax(address addr) internal view returns (uint256) {
         Player storage p = players[addr];
         if (!p.isActive) return 0;
 
-        uint64 lastBlock = p.lastInteractionBlock;
+        uint64 lastBlock = p.lastTaxBlock;
         if (block.number <= lastBlock) return 0;
 
         // Piecewise calculation if tax rate changed during player's idle period

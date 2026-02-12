@@ -2,6 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ShellToken} from "../src/ShellToken.sol";
 import {GameCore} from "../src/GameCore.sol";
 import {Election} from "../src/Election.sol";
@@ -21,6 +23,8 @@ contract GameCoreTest is Test {
     uint256 constant ENTRY_TICKET = 30_000 * 1e18;
     uint256 constant MIN_SHELL_ENTRY = 300 * 1e18; // 300 SHELL = 30,000 KRILL
     uint256 constant INSOLVENCY_THRESHOLD = 1_000 * 1e18;
+    uint256 constant DELINQUENCY_GRACE_PERIOD = 3600;
+    uint256 constant DELINQUENCY_BOUNTY_BPS = 1000;
 
     function setUp() public {
         shell = new ShellToken();
@@ -210,6 +214,139 @@ contract GameCoreTest is Test {
         assertEq(bobBalBefore - bobBalAfter, 200 * 1e18);
     }
 
+    // ─── Split Settlement Tests ──────────────────────────────────────────
+
+    function test_SettleTax_PaysWithoutClaimingRewards() public {
+        vm.prank(alice);
+        game.enter(5000 * 1e18); // 470,000 KRILL
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        _makeKing(alice);
+
+        // Advance and distribute rewards
+        vm.roll(block.number + 100);
+        vm.prank(alice);
+        game.distributeToAllPlayers(10_000 * 1e18);
+
+        // Alice has pending reward = 5,000 KRILL (10,000 / 2 players)
+        uint256 pendingBefore = game.pendingReward(alice);
+        assertEq(pendingBefore, 5_000 * 1e18);
+
+        // Alice settles tax only
+        vm.prank(alice);
+        game.settleTax();
+
+        // Pending reward should still be there (not claimed)
+        uint256 pendingAfter = game.pendingReward(alice);
+        assertEq(pendingAfter, 5_000 * 1e18);
+    }
+
+    function test_ClaimReward_WithoutPayingTax() public {
+        vm.prank(alice);
+        game.enter(5000 * 1e18); // 470,000 KRILL
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        _makeKing(alice);
+
+        // Advance and distribute rewards
+        vm.roll(block.number + 100);
+        vm.prank(alice);
+        game.distributeToAllPlayers(10_000 * 1e18);
+
+        uint256 balBefore = game.getEffectiveBalance(alice);
+
+        // Alice claims rewards only
+        vm.prank(alice);
+        game.claimReward();
+
+        // Effective balance unchanged (rewards moved from pending to krillBalance, but tax still pending)
+        uint256 balAfter = game.getEffectiveBalance(alice);
+        assertEq(balBefore, balAfter);
+    }
+
+    function test_TaxContinuesAfterRewardClaim() public {
+        vm.prank(alice);
+        game.enter(5000 * 1e18); // 470,000 KRILL
+
+        // Advance 100 blocks
+        vm.roll(block.number + 100);
+
+        // Claim reward (does NOT reset tax clock)
+        vm.prank(alice);
+        game.claimReward();
+
+        // Advance 100 more blocks
+        vm.roll(block.number + 100);
+
+        // Pending tax should be for 200 blocks total (not 100)
+        uint256 effective = game.getEffectiveBalance(alice);
+        // 470,000 - 200 blocks * 1 KRILL/block = 469,800
+        assertEq(effective, 469_800 * 1e18);
+    }
+
+    function test_DelinquencyPersistsAfterRewardClaim() public {
+        vm.prank(alice);
+        game.enter(5000 * 1e18);
+
+        // Advance past grace period
+        vm.roll(block.number + DELINQUENCY_GRACE_PERIOD + 1);
+
+        assertTrue(game.isDelinquent(alice));
+
+        // Claim rewards — should NOT reset delinquency
+        vm.prank(alice);
+        game.claimReward();
+
+        assertTrue(game.isDelinquent(alice));
+    }
+
+    function test_SettleTax_ResetsDelinquency() public {
+        vm.prank(alice);
+        game.enter(5000 * 1e18);
+
+        // Advance past grace period
+        vm.roll(block.number + DELINQUENCY_GRACE_PERIOD + 1);
+
+        assertTrue(game.isDelinquent(alice));
+
+        // Settle tax — should reset delinquency
+        vm.prank(alice);
+        game.settleTax();
+
+        assertFalse(game.isDelinquent(alice));
+    }
+
+    function test_DepositStillSettlesBoth() public {
+        vm.prank(alice);
+        game.enter(5000 * 1e18); // 470,000 KRILL
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        _makeKing(alice);
+
+        // Advance and distribute rewards
+        vm.roll(block.number + 100);
+        vm.prank(alice);
+        game.distributeToAllPlayers(10_000 * 1e18);
+
+        // Pending reward before deposit
+        uint256 pendingBefore = game.pendingReward(alice);
+        assertEq(pendingBefore, 5_000 * 1e18);
+
+        // Deposit settles both tax and rewards
+        vm.prank(alice);
+        game.deposit(100 * 1e18);
+
+        // After deposit, pending reward should be 0 (claimed during settlement)
+        uint256 pendingAfter = game.pendingReward(alice);
+        assertEq(pendingAfter, 0);
+
+        // Not delinquent (tax clock reset)
+        assertFalse(game.isDelinquent(alice));
+    }
+
     // ─── Treasury Yield Tests ───────────────────────────────────────────
 
     function test_TreasuryYield() public {
@@ -312,6 +449,168 @@ contract GameCoreTest is Test {
         vm.prank(bob);
         vm.expectRevert(GameCore.CallerNotEligible.selector);
         game.purge(alice);
+    }
+
+    // ─── Settle Delinquent Tests ────────────────────────────────────────
+
+    function test_SettleDelinquent_Success() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18); // 20,000 KRILL
+        vm.prank(bob);
+        game.enter(500 * 1e18); // 20,000 KRILL
+
+        // Advance past grace period
+        vm.roll(block.number + DELINQUENCY_GRACE_PERIOD + 1);
+
+        assertTrue(game.isDelinquent(alice));
+
+        uint256 aliceBalBefore = game.getEffectiveBalance(alice);
+        uint256 bobBalBefore = game.getEffectiveBalance(bob);
+
+        vm.prank(bob);
+        game.settleDelinquent(alice);
+
+        // Alice is no longer delinquent
+        assertFalse(game.isDelinquent(alice));
+
+        // Bounty = pendingTax * 10%
+        uint256 pendingTax = (DELINQUENCY_GRACE_PERIOD + 1) * 1e18; // 3601 KRILL
+        uint256 expectedBounty = (pendingTax * DELINQUENCY_BOUNTY_BPS) / 10000; // 360.1 KRILL
+
+        // Bob's balance should increase by bounty (minus his own tax for the settle block)
+        uint256 bobBalAfter = game.getEffectiveBalance(bob);
+        // Bob gained bounty but also paid his own tax for 3601 blocks
+        // Bob effective before: 20,000 - 3601 = 16,399
+        // Bob effective after settle: should be ~ 16,399 + 360.1 = 16,759.1
+        assertEq(bobBalAfter, bobBalBefore + expectedBounty);
+
+        // Alice paid normal tax + bounty
+        // Alice effective before: 20,000 - 3601 = 16,399
+        // Alice effective after: 20,000 - 3601 - 360.1 = 16,038.9
+        uint256 aliceBalAfter = game.getEffectiveBalance(alice);
+        assertEq(aliceBalAfter, aliceBalBefore - expectedBounty);
+    }
+
+    function test_SettleDelinquent_NotDelinquent_Reverts() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        // Advance exactly to grace period (not past it)
+        vm.roll(block.number + DELINQUENCY_GRACE_PERIOD);
+
+        assertFalse(game.isDelinquent(alice));
+
+        vm.prank(bob);
+        vm.expectRevert(GameCore.PlayerNotDelinquent.selector);
+        game.settleDelinquent(alice);
+    }
+
+    function test_SettleDelinquent_CallerNotPlayer_Reverts() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        vm.roll(block.number + DELINQUENCY_GRACE_PERIOD + 1);
+
+        // Bob is not a player
+        vm.prank(bob);
+        vm.expectRevert(GameCore.CallerNotEligible.selector);
+        game.settleDelinquent(alice);
+    }
+
+    function test_SettleDelinquent_CallerInsolvent_Reverts() public {
+        vm.prank(alice);
+        game.enter(400 * 1e18); // 10,000 KRILL
+        vm.prank(bob);
+        game.enter(400 * 1e18); // 10,000 KRILL
+
+        // Advance so both are insolvent and delinquent
+        vm.roll(block.number + 9_001);
+
+        assertTrue(game.isInsolvent(alice));
+        assertTrue(game.isInsolvent(bob));
+        assertTrue(game.isDelinquent(alice));
+
+        vm.prank(bob);
+        vm.expectRevert(GameCore.CallerNotEligible.selector);
+        game.settleDelinquent(alice);
+    }
+
+    function test_SettleDelinquent_TargetNotActive_Reverts() public {
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        vm.roll(block.number + DELINQUENCY_GRACE_PERIOD + 1);
+
+        // Alice never entered
+        vm.prank(bob);
+        vm.expectRevert(GameCore.PlayerNotActive.selector);
+        game.settleDelinquent(alice);
+    }
+
+    function test_SettleDelinquent_SelfSettle_Reverts() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        vm.roll(block.number + DELINQUENCY_GRACE_PERIOD + 1);
+
+        vm.prank(alice);
+        vm.expectRevert(GameCore.CannotSettleSelf.selector);
+        game.settleDelinquent(alice);
+    }
+
+    function test_SettleDelinquent_BountyCapped() public {
+        // Alice enters with minimal balance
+        vm.prank(alice);
+        game.enter(400 * 1e18); // 40,000 - 30,000 ticket = 10,000 KRILL
+
+        vm.prank(bob);
+        game.enter(5000 * 1e18); // 500,000 - 30,000 = 470,000 KRILL
+
+        // Advance many blocks so pending tax >> alice's balance
+        // Tax at 1/block for 15,000 blocks = 15,000 KRILL > alice's 10,000
+        vm.roll(block.number + 15_000);
+
+        // pendingTax = 15,000, bounty uncapped = 1,500
+        // But alice's krillBalance is only 10,000, settlement caps tax at 10,000
+        // After settlement alice balance = 0 (tax ate everything, no rewards since no distribution)
+        // Bounty capped at 0
+
+        vm.prank(bob);
+        game.settleDelinquent(alice);
+
+        // Alice should have 0 balance (tax consumed everything, bounty capped)
+        assertEq(game.getEffectiveBalance(alice), 0);
+    }
+
+    function test_SettleDelinquent_MakesInsolvent() public {
+        // Alice enters with 350 SHELL = 35,000 - 30,000 = 5,000 KRILL
+        vm.prank(alice);
+        game.enter(350 * 1e18);
+
+        vm.prank(bob);
+        game.enter(5000 * 1e18); // 470,000 KRILL
+
+        // Advance 3,700 blocks
+        // pendingTax = 3,700, bounty = 370
+        // After settlement: 5,000 - 3,700 = 1,300
+        // After bounty: 1,300 - 370 = 930 < 1,000 threshold
+        vm.roll(block.number + 3_700);
+
+        assertFalse(game.isInsolvent(alice));
+
+        vm.prank(bob);
+        game.settleDelinquent(alice);
+
+        // Alice should now be insolvent
+        assertTrue(game.isInsolvent(alice));
+        assertTrue(game.isActivePlayer(alice)); // Still active, just purgeable
+
+        // Bob can now purge alice
+        vm.prank(bob);
+        game.purge(alice);
+        assertFalse(game.isActivePlayer(alice));
     }
 
     // ─── Reward Distribution Tests ──────────────────────────────────────
@@ -460,6 +759,136 @@ contract GameCoreTest is Test {
         // Charlie did not vote for alice, so should have 0
         uint256 charlieVoterReward = game.pendingVoterReward(charlie);
         assertEq(charlieVoterReward, 0);
+    }
+
+    // ─── Admin / Pause Tests ─────────────────────────────────────────────
+
+    function test_Owner_IsDeployer() public view {
+        assertEq(game.owner(), deployer);
+    }
+
+    function test_Pause_OnlyOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        game.pause();
+    }
+
+    function test_Unpause_OnlyOwner() public {
+        game.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        game.unpause();
+    }
+
+    function test_Pause_Unpause() public {
+        game.pause();
+        assertTrue(game.paused());
+
+        game.unpause();
+        assertFalse(game.paused());
+    }
+
+    function test_EmergencyWithdrawShell() public {
+        uint256 gameBalance = shell.balanceOf(address(game));
+        uint256 ownerBefore = shell.balanceOf(deployer);
+
+        game.pause();
+        game.emergencyWithdrawShell();
+
+        assertEq(shell.balanceOf(address(game)), 0);
+        assertEq(shell.balanceOf(deployer), ownerBefore + gameBalance);
+    }
+
+    function test_EmergencyWithdrawShell_OnlyOwner() public {
+        game.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        game.emergencyWithdrawShell();
+    }
+
+    function test_EmergencyWithdrawShell_RequiresPaused() public {
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.emergencyWithdrawShell();
+    }
+
+    function test_WhenPaused_Enter_Reverts() public {
+        game.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.enter(500 * 1e18);
+    }
+
+    function test_WhenPaused_Deposit_Reverts() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        game.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.deposit(100 * 1e18);
+    }
+
+    function test_WhenPaused_Withdraw_Reverts() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        game.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.withdraw(1000 * 1e18);
+    }
+
+    function test_WhenPaused_SettleTax_Reverts() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        game.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.settleTax();
+    }
+
+    function test_WhenPaused_ClaimReward_Reverts() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        game.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.claimReward();
+    }
+
+    function test_WhenPaused_Purge_Reverts() public {
+        game.pause();
+
+        vm.prank(bob);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.purge(alice);
+    }
+
+    function test_WhenPaused_SettleDelinquent_Reverts() public {
+        game.pause();
+
+        vm.prank(bob);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        game.settleDelinquent(alice);
+    }
+
+    function test_WhenPaused_Resumes_Normally() public {
+        game.pause();
+        game.unpause();
+
+        // Should work again after unpause
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+        assertTrue(game.isActivePlayer(alice));
     }
 
     // ─── Fuzz Tests ─────────────────────────────────────────────────────
