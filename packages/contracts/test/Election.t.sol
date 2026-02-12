@@ -93,6 +93,173 @@ contract ElectionTest is Test {
         election.fundCampaign(1000 * 1e18);
     }
 
+    function test_UpdateBribePerVote_Success() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(100 * 1e18);
+
+        vm.prank(alice);
+        election.updateBribePerVote(200 * 1e18);
+
+        (uint256 bribePerVote,,,) = election.candidates(0, alice);
+        assertEq(bribePerVote, 200 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_EmitsEvent() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(100 * 1e18);
+
+        vm.expectEmit(true, true, false, true);
+        emit Election.BribePerVoteUpdated(0, alice, 100 * 1e18, 200 * 1e18);
+
+        vm.prank(alice);
+        election.updateBribePerVote(200 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_NotRegistered() public {
+        vm.prank(alice);
+        vm.expectRevert(Election.CandidateNotRegistered.selector);
+        election.updateBribePerVote(100 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_NotActivePlayer() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(100 * 1e18);
+
+        // Purge alice from the game
+        vm.prank(address(election));
+        game.purge(alice);
+
+        vm.prank(alice);
+        vm.expectRevert(Election.NotActivePlayer.selector);
+        election.updateBribePerVote(200 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_CannotDecrease() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(100 * 1e18);
+
+        vm.prank(alice);
+        vm.expectRevert(Election.BribeCannotDecrease.selector);
+        election.updateBribePerVote(50 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_CanIncreaseFromZero() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(0);
+
+        vm.prank(alice);
+        election.updateBribePerVote(100 * 1e18);
+
+        (uint256 bribePerVote,,,) = election.candidates(0, alice);
+        assertEq(bribePerVote, 100 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_CanIncreaseFromNonZero() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(50 * 1e18);
+
+        vm.prank(alice);
+        election.updateBribePerVote(150 * 1e18);
+
+        (uint256 bribePerVote,,,) = election.candidates(0, alice);
+        assertEq(bribePerVote, 150 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_VoteBehavior() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(50 * 1e18);
+
+        // Fund campaign for bribes
+        vm.prank(alice);
+        election.fundCampaign(1000 * 1e18);
+
+        // Advance past voter age
+        vm.roll(block.number + MIN_VOTER_AGE + 1);
+
+        // Bob votes and receives old bribe (50)
+        uint256 bobBalanceBefore = game.krillBalanceOf(bob);
+        vm.prank(bob);
+        election.vote(alice);
+        uint256 bobBalanceAfter = game.krillBalanceOf(bob);
+        assertEq(bobBalanceAfter - bobBalanceBefore, 50 * 1e18);
+
+        // Alice updates bribe
+        vm.prank(alice);
+        election.updateBribePerVote(100 * 1e18);
+
+        // Charlie votes and receives new bribe (100)
+        uint256 charlieBalanceBefore = game.krillBalanceOf(charlie);
+        vm.prank(charlie);
+        election.vote(alice);
+        uint256 charlieBalanceAfter = game.krillBalanceOf(charlie);
+        assertEq(charlieBalanceAfter - charlieBalanceBefore, 100 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_SameValue() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(100 * 1e18);
+
+        // Update to same value should succeed (no-op)
+        vm.prank(alice);
+        election.updateBribePerVote(100 * 1e18);
+
+        (uint256 bribePerVote,,,) = election.candidates(0, alice);
+        assertEq(bribePerVote, 100 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_MultipleIncreases() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(50 * 1e18);
+
+        vm.prank(alice);
+        election.updateBribePerVote(100 * 1e18);
+
+        vm.prank(alice);
+        election.updateBribePerVote(150 * 1e18);
+
+        vm.prank(alice);
+        election.updateBribePerVote(200 * 1e18);
+
+        (uint256 bribePerVote,,,) = election.candidates(0, alice);
+        assertEq(bribePerVote, 200 * 1e18);
+    }
+
+    function test_UpdateBribePerVote_InsufficientFundsStillSucceeds() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(50 * 1e18);
+
+        // Fund with small amount
+        vm.prank(alice);
+        election.fundCampaign(10 * 1e18);
+
+        // Update to higher bribe (succeeds even though funds are insufficient)
+        vm.prank(alice);
+        election.updateBribePerVote(1000 * 1e18);
+
+        (uint256 bribePerVote,,,) = election.candidates(0, alice);
+        assertEq(bribePerVote, 1000 * 1e18);
+
+        // Advance past voter age and vote
+        vm.roll(block.number + MIN_VOTER_AGE + 1);
+
+        // Bob votes but gets 0 bribe (insufficient funds)
+        uint256 bobBalanceBefore = game.krillBalanceOf(bob);
+        vm.prank(bob);
+        election.vote(alice);
+        uint256 bobBalanceAfter = game.krillBalanceOf(bob);
+        assertEq(bobBalanceAfter - bobBalanceBefore, 0); // No bribe paid
+    }
+
     // ─── Voting Tests ───────────────────────────────────────────────────
 
     function test_Vote_Success() public {
@@ -209,9 +376,10 @@ contract ElectionTest is Test {
         assertEq(voteCount, 2);
     }
 
-    // ─── Finalize Tests ─────────────────────────────────────────────────
+    // ─── Real-Time King Tracking Tests ──────────────────────────────────
 
-    function test_FinalizeElection_Success() public {
+    function test_KingChangesAutomaticallyOnTermBoundary() public {
+        // Alice wins term 0
         _creditForRegistration(alice);
         vm.prank(alice);
         election.startCampaign(0);
@@ -221,38 +389,18 @@ contract ElectionTest is Test {
         vm.prank(bob);
         election.vote(alice);
 
-        // Advance to end of term
+        // Before term ends: no king yet (getCurrentKing returns term -1's leader)
+        assertEq(election.getCurrentKing(), address(0));
+        assertEq(game.king(), address(0));
+
+        // After term ends (roll to term 1): alice becomes king
         vm.roll(block.number + TERM_DURATION);
 
-        election.finalizeElection();
-
-        assertTrue(election.termFinalized(0));
-        assertEq(election.termWinner(0), alice);
+        assertEq(election.getCurrentKing(), alice);
+        assertEq(game.king(), alice);
     }
 
-    function test_FinalizeElection_TooEarly() public {
-        _creditForRegistration(alice);
-        vm.prank(alice);
-        election.startCampaign(0);
-
-        vm.expectRevert(Election.TermNotEnded.selector);
-        election.finalizeElection();
-    }
-
-    function test_FinalizeElection_NoCandidates_IncumbentStays() public {
-        // First set a king
-        vm.prank(address(election));
-        game.setKing(alice);
-
-        // Advance past term
-        vm.roll(block.number + TERM_DURATION);
-
-        election.finalizeElection();
-
-        assertEq(election.termWinner(0), alice);
-    }
-
-    function test_FinalizeElection_Tie_FirstRegisteredWins() public {
+    function test_LeadingCandidateTrackedRealTime() public {
         _creditForRegistration(alice);
         _creditForRegistration(bob);
 
@@ -263,68 +411,89 @@ contract ElectionTest is Test {
 
         vm.roll(block.number + MIN_VOTER_AGE + 1);
 
-        // Each gets 1 vote
+        // Charlie votes for Alice → alice is leading
         vm.prank(charlie);
         election.vote(alice);
+        assertEq(election.leadingCandidate(0), alice);
+        assertEq(election.leadingVoteCount(0), 1);
+
+        // Dave votes for Bob → bob is leading (tie broken by who reached vote count first)
         vm.prank(dave);
         election.vote(bob);
-
-        vm.roll(block.number + TERM_DURATION);
-        election.finalizeElection();
-
-        // Alice registered first, wins tie
-        assertEq(election.termWinner(0), alice);
+        assertEq(election.leadingCandidate(0), alice); // Alice still leads (reached 1 first)
+        assertEq(election.leadingVoteCount(0), 1);
     }
 
-    function test_FinalizeElection_AlreadyFinalized() public {
+    function test_TieBreaking_FirstToReachVoteCountWins() public {
         _creditForRegistration(alice);
+        _creditForRegistration(bob);
+
+        // Alice campaigns first, Bob campaigns second
         vm.prank(alice);
         election.startCampaign(0);
-
-        vm.roll(block.number + TERM_DURATION + 1);
-        election.finalizeElection();
-
-        vm.expectRevert(Election.ElectionAlreadyFinalized.selector);
-        election.finalizeElection();
-    }
-
-    // ─── Advance Term Tests ─────────────────────────────────────────────
-
-    function test_AdvanceTerm_RefundsAndKingChange() public {
-        _creditForRegistration(alice);
-        vm.prank(alice);
+        vm.prank(bob);
         election.startCampaign(0);
-
-        // Fund campaign (should be refunded)
-        vm.prank(alice);
-        election.fundCampaign(5_000 * 1e18);
 
         vm.roll(block.number + MIN_VOTER_AGE + 1);
 
-        vm.prank(bob);
+        // Charlie votes for Alice → alice leads with 1 vote
+        vm.prank(charlie);
         election.vote(alice);
+        assertEq(election.leadingCandidate(0), alice);
 
+        // Dave votes for Bob → tie at 1 vote each, but alice still leads
+        vm.prank(dave);
+        election.vote(bob);
+        assertEq(election.leadingCandidate(0), alice);
+
+        // Roll to term 1
         vm.roll(block.number + TERM_DURATION);
-        election.finalizeElection();
-        election.advanceTerm();
 
-        // Alice should be king now
-        assertEq(game.king(), alice);
-        assertEq(election.currentTerm(), 1);
-
-        // Alice should have campaign funds refunded
-        // (credited back via creditKrill)
+        // Verify alice is king
+        assertEq(election.getCurrentKing(), alice);
     }
 
-    function test_AdvanceTerm_NotFinalized() public {
-        vm.expectRevert(Election.ElectionNotFinalized.selector);
-        election.advanceTerm();
+    function test_NoCandidates_NoKing() public {
+        // Don't create any candidates for term 0
+        // Roll to term 1
+        vm.roll(block.number + TERM_DURATION);
+
+        // Verify no king from term 0
+        assertEq(election.getCurrentKing(), address(0));
+        assertEq(game.king(), address(0));
+    }
+
+    function test_CampaignFundsReclaimAfterTermEnds() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(100 * 1e18);
+
+        // Fund campaign
+        vm.prank(alice);
+        election.fundCampaign(5_000 * 1e18);
+
+        uint256 aliceBalanceBefore = game.krillBalanceOf(alice);
+
+        // Try to reclaim before term ends
+        vm.prank(alice);
+        vm.expectRevert(Election.TermNotEnded.selector);
+        election.reclaimCampaignFunds(0);
+
+        // Roll to term 1
+        vm.roll(block.number + TERM_DURATION);
+
+        // Reclaim succeeds
+        vm.prank(alice);
+        election.reclaimCampaignFunds(0);
+
+        uint256 aliceBalanceAfter = game.krillBalanceOf(alice);
+        assertEq(aliceBalanceAfter - aliceBalanceBefore, 5_000 * 1e18);
     }
 
     // ─── Full Election Cycle Integration ────────────────────────────────
 
     function test_FullElectionCycle() public {
-        // === Term 0: Alice runs, gets votes, becomes king ===
+        // === Term 0: Alice runs, gets votes ===
         _creditForRegistration(alice);
         vm.prank(alice);
         election.startCampaign(50 * 1e18); // 50 KRILL bribe per vote
@@ -339,12 +508,12 @@ contract ElectionTest is Test {
         vm.prank(charlie);
         election.vote(alice);
 
+        // === Term 1 begins: Alice automatically becomes king ===
         vm.roll(block.number + TERM_DURATION);
-        election.finalizeElection();
-        election.advanceTerm();
 
+        assertEq(election.getCurrentKing(), alice);
         assertEq(game.king(), alice);
-        assertEq(election.currentKingVoterCount(), 2);
+        assertEq(election.getCurrentKingVoterCount(), 2);
         assertTrue(election.didVoteForCurrentKing(bob));
         assertTrue(election.didVoteForCurrentKing(charlie));
         assertFalse(election.didVoteForCurrentKing(dave));
@@ -371,10 +540,10 @@ contract ElectionTest is Test {
         vm.prank(dave);
         election.vote(bob);
 
+        // === Term 2 begins: Bob automatically becomes king ===
         vm.roll(block.number + TERM_DURATION);
-        election.finalizeElection();
-        election.advanceTerm();
 
+        assertEq(election.getCurrentKing(), bob);
         assertEq(game.king(), bob);
         // Previous voter rewards should be forfeited (new epoch)
         assertEq(game.pendingVoterReward(bob), 0);

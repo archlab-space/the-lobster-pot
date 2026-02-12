@@ -709,12 +709,6 @@ contract GameCoreTest is Test {
         game.distributeToVoters(100);
     }
 
-    function test_OnlyElection_SetKing() public {
-        vm.prank(alice);
-        vm.expectRevert(GameCore.NotElection.selector);
-        game.setKing(alice);
-    }
-
     function test_OnlyElection_DeductKrill() public {
         vm.prank(alice);
         vm.expectRevert(GameCore.NotElection.selector);
@@ -955,8 +949,22 @@ contract GameCoreTest is Test {
     // ─── Helpers ────────────────────────────────────────────────────────
 
     function _makeKing(address who) internal {
+        uint256 regFee = 1_000_000 * 1e18;
         vm.prank(address(election));
-        game.setKing(who);
+        game.creditKrill(who, regFee);
+
+        vm.prank(who);
+        election.startCampaign(0);
+
+        vm.roll(block.number + MIN_VOTER_AGE + 1);
+
+        // Need at least one vote - use another player as voter
+        address voter = who == alice ? bob : alice;
+        vm.prank(voter);
+        election.vote(who);
+
+        // Advance to next term - king changes automatically
+        vm.roll(block.number + TERM_DURATION);
     }
 
     function _makeKingWithVoters(address kingAddr, address voter) internal {
@@ -982,11 +990,7 @@ contract GameCoreTest is Test {
         vm.prank(voter);
         election.vote(kingAddr);
 
-        // Advance to end of term
+        // Advance to end of term - king changes automatically
         vm.roll(block.number + TERM_DURATION + 1);
-
-        // Finalize and advance
-        election.finalizeElection();
-        election.advanceTerm();
     }
 }

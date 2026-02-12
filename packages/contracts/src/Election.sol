@@ -41,6 +41,7 @@ contract Election is ReentrancyGuard {
     event CampaignFunded(uint256 indexed term, address indexed candidate, uint256 amount);
     event VoteCast(uint256 indexed term, address indexed voter, address indexed candidate, uint256 bribe);
     event CampaignFundsReclaimed(uint256 indexed term, address indexed candidate, uint256 amount);
+    event BribePerVoteUpdated(uint256 indexed term, address indexed candidate, uint256 oldBribe, uint256 newBribe);
 
     // ─── Errors ─────────────────────────────────────────────────────────
     error TermNotEnded();
@@ -51,6 +52,7 @@ contract Election is ReentrancyGuard {
     error CandidateNotRegistered();
     error TooYoungToVote();
     error NoFundsToReclaim();
+    error BribeCannotDecrease();
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier whenGameNotPaused() {
@@ -101,6 +103,19 @@ contract Election is ReentrancyGuard {
         c.campaignFunds += amount;
 
         emit CampaignFunded(term, msg.sender, amount);
+    }
+
+    function updateBribePerVote(uint256 newBribePerVote) external nonReentrant whenGameNotPaused {
+        uint256 term = currentTerm() + 1; // Update for next term
+        Candidate storage c = candidates[term][msg.sender];
+        if (!c.registered) revert CandidateNotRegistered();
+        if (!game.isActivePlayer(msg.sender)) revert NotActivePlayer();
+        if (newBribePerVote < c.bribePerVote) revert BribeCannotDecrease();
+
+        uint256 oldBribePerVote = c.bribePerVote;
+        c.bribePerVote = newBribePerVote;
+
+        emit BribePerVoteUpdated(term, msg.sender, oldBribePerVote, newBribePerVote);
     }
 
     // ─── Vote ───────────────────────────────────────────────────────────
