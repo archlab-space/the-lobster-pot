@@ -127,9 +127,11 @@ contract ElectionTest is Test {
         _creditForRegistration(alice);
         vm.prank(alice);
         election.startCampaign(100 * 1e18);
+        vm.prank(alice);
+        election.fundCampaign(4_970_000 * 1e18);
 
         // Purge alice from the game
-        vm.prank(address(election));
+        vm.prank(bob);
         game.purge(alice);
 
         vm.prank(alice);
@@ -298,6 +300,9 @@ contract ElectionTest is Test {
 
         // Advance many blocks so tax eats balance below VOTER_MIN_BALANCE
         vm.roll(block.number + 19_100);
+
+        vm.prank(poorPlayer);
+        game.settleTax();
 
         vm.prank(poorPlayer);
         vm.expectRevert(Election.InsufficientBalance.selector);
@@ -594,10 +599,10 @@ contract ElectionTest is Test {
         assertEq(remaining, TERM_DURATION - 10_000);
     }
 
-    function test_BlocksRemainingInTerm_PastEnd() public {
+    function test_BlocksRemainingInTerm_InNextTerm() public {
         vm.roll(block.number + TERM_DURATION + 100);
         uint256 remaining = election.blocksRemainingInTerm();
-        assertEq(remaining, 0);
+        assertEq(remaining, TERM_DURATION - 100);
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────

@@ -75,7 +75,7 @@ contract Election is ReentrancyGuard {
     // ─── Campaign Functions ─────────────────────────────────────────────
 
     function startCampaign(uint256 bribePerVote) external nonReentrant whenGameNotPaused {
-        uint256 term = currentTerm() + 1; // Register for next term
+        uint256 term = currentTerm(); // Register for current term
         if (candidates[term][msg.sender].registered) revert AlreadyRegistered();
         if (!game.isActivePlayer(msg.sender)) revert NotActivePlayer();
 
@@ -94,7 +94,7 @@ contract Election is ReentrancyGuard {
     }
 
     function fundCampaign(uint256 amount) external nonReentrant whenGameNotPaused {
-        uint256 term = currentTerm() + 1; // Fund for next term
+        uint256 term = currentTerm(); // Fund for current term
         Candidate storage c = candidates[term][msg.sender];
         if (!c.registered) revert CandidateNotRegistered();
         if (!game.isActivePlayer(msg.sender)) revert NotActivePlayer();
@@ -106,7 +106,7 @@ contract Election is ReentrancyGuard {
     }
 
     function updateBribePerVote(uint256 newBribePerVote) external nonReentrant whenGameNotPaused {
-        uint256 term = currentTerm() + 1; // Update for next term
+        uint256 term = currentTerm(); // Update for current term
         Candidate storage c = candidates[term][msg.sender];
         if (!c.registered) revert CandidateNotRegistered();
         if (!game.isActivePlayer(msg.sender)) revert NotActivePlayer();
@@ -121,7 +121,7 @@ contract Election is ReentrancyGuard {
     // ─── Vote ───────────────────────────────────────────────────────────
 
     function vote(address candidate) external nonReentrant whenGameNotPaused {
-        uint256 term = currentTerm() + 1; // Vote for next term
+        uint256 term = currentTerm(); // Vote for current term
         if (hasVoted[term][msg.sender]) revert AlreadyVoted();
         if (!game.isActivePlayer(msg.sender)) revert NotActivePlayer();
 

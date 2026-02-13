@@ -191,14 +191,14 @@ contract GameCoreTest is Test {
         game.enter(5000 * 1e18); // 500,000 KRILL
 
         vm.prank(bob);
-        game.enter(500 * 1e18); // 50,000 KRILL
+        game.enter(5000 * 1e18); // 50,000 KRILL
 
         // Make alice king via election
         _makeKing(alice);
 
         // Record bob's balance
         vm.prank(bob);
-        game.claimReward(); // settle bob's state
+        game.settleTax();
 
         uint256 bobBalBefore = game.getEffectiveBalance(bob);
 
@@ -649,25 +649,27 @@ contract GameCoreTest is Test {
         vm.prank(alice);
         game.enter(5000 * 1e18);
 
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
         _makeKing(alice);
 
         vm.roll(block.number + 100);
-
-        // Distribute before bob enters
-        vm.prank(alice);
-        game.distributeToAllPlayers(10_000 * 1e18);
-
-        // Bob enters after distribution
-        vm.prank(bob);
-        game.enter(500 * 1e18);
 
         // Bob should have 0 pending reward from the prior distribution
         uint256 bobPending = game.pendingReward(bob);
         assertEq(bobPending, 0);
 
+        // Distribute before bob enters
+        vm.prank(alice);
+        game.distributeToAllPlayers(10_000 * 1e18);
+
         // Alice should have all 10,000
         uint256 alicePending = game.pendingReward(alice);
-        assertEq(alicePending, 10_000 * 1e18);
+        assertEq(alicePending, 5_000 * 1e18);
+
+        bobPending = game.pendingReward(bob);
+        assertEq(bobPending, 5_000 * 1e18);
     }
 
     // ─── Effective Balance View ─────────────────────────────────────────
@@ -724,6 +726,10 @@ contract GameCoreTest is Test {
     function test_SetTaxRate_InvalidRate() public {
         vm.prank(alice);
         game.enter(5000 * 1e18);
+
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
         _makeKing(alice);
 
         vm.prank(alice);
