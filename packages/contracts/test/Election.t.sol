@@ -2,6 +2,9 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ShellToken} from "../src/ShellToken.sol";
 import {GameCore} from "../src/GameCore.sol";
 import {Election} from "../src/Election.sol";
@@ -23,9 +26,25 @@ contract ElectionTest is Test {
 
     function setUp() public {
         shell = new ShellToken();
-        game = new GameCore(address(shell));
-        election = new Election(address(game));
-        game.initialize(address(election));
+
+        // Deploy implementations
+        GameCore gameImpl = new GameCore();
+        Election electionImpl = new Election();
+
+        // Deploy GameCore proxy (election=address(0) initially)
+        game = GameCore(address(new ERC1967Proxy(
+            address(gameImpl),
+            abi.encodeWithSelector(GameCore.initialize.selector, address(shell), address(0), address(this))
+        )));
+
+        // Deploy Election proxy
+        election = Election(address(new ERC1967Proxy(
+            address(electionImpl),
+            abi.encodeWithSelector(Election.initialize.selector, address(game), address(this))
+        )));
+
+        // Set election on GameCore
+        game.setElection(address(election));
 
         // Fund game
         shell.transfer(address(game), 750_000_000 * 1e18);
@@ -603,6 +622,47 @@ contract ElectionTest is Test {
         vm.roll(block.number + TERM_DURATION + 100);
         uint256 remaining = election.blocksRemainingInTerm();
         assertEq(remaining, TERM_DURATION - 100);
+    }
+
+    // ─── Upgrade Tests ──────────────────────────────────────────────────
+
+    function test_Election_Upgrade_OnlyOwner() public {
+        Election newImpl = new Election();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, alice));
+        election.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_Election_Upgrade_PreservesState() public {
+        // Create a campaign first
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(100 * 1e18);
+
+        uint256 candidateCount = election.getCandidateCount(0);
+        uint256 startBlock = election.gameStartBlock();
+
+        // Upgrade
+        Election newImpl = new Election();
+        election.upgradeToAndCall(address(newImpl), "");
+
+        // State preserved
+        assertEq(election.getCandidateCount(0), candidateCount);
+        assertEq(election.gameStartBlock(), startBlock);
+        assertEq(election.owner(), address(this));
+    }
+
+    function test_Election_Implementation_CannotBeInitialized() public {
+        Election impl = new Election();
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        impl.initialize(address(game), address(this));
+    }
+
+    function test_Election_Initialize_OnlyOnce() public {
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        election.initialize(address(game), address(this));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────

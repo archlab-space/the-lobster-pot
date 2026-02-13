@@ -2,9 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {IGameCore} from "./interfaces/IGameCore.sol";
 
-contract Election is ReentrancyGuard {
+contract Election is Initializable, ReentrancyGuard, OwnableUpgradeable, UUPSUpgradeable {
     // ─── Constants ──────────────────────────────────────────────────────
     uint256 public constant TERM_DURATION = 72_000; // ~ 8 hours
     uint256 public constant REGISTRATION_FEE = 1_000_000 * 1e18;
@@ -20,8 +23,8 @@ contract Election is ReentrancyGuard {
     }
 
     // ─── State ──────────────────────────────────────────────────────────
-    IGameCore public immutable game;
-    uint256 public immutable gameStartBlock;
+    IGameCore public game;
+    uint256 public gameStartBlock;
 
     // term => candidate address => Candidate
     mapping(uint256 => mapping(address => Candidate)) public candidates;
@@ -35,6 +38,9 @@ contract Election is ReentrancyGuard {
     // Real-time leader tracking (first to reach vote count wins)
     mapping(uint256 => address) public leadingCandidate;
     mapping(uint256 => uint256) public leadingVoteCount;
+
+    // ─── Storage Gap ────────────────────────────────────────────────────
+    uint256[50] private __gap;
 
     // ─── Events ─────────────────────────────────────────────────────────
     event CampaignStarted(uint256 indexed term, address indexed candidate, uint256 bribePerVote);
@@ -60,11 +66,22 @@ contract Election is ReentrancyGuard {
         _;
     }
 
-    // ─── Constructor ────────────────────────────────────────────────────
-    constructor(address _game) {
+    // ─── Constructor (disabled for proxy) ────────────────────────────────
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    // ─── Initialization ─────────────────────────────────────────────────
+    function initialize(address _game, address _owner) external initializer {
+        __Ownable_init(_owner);
         game = IGameCore(_game);
         gameStartBlock = block.number;
     }
+
+    // ─── UUPS ───────────────────────────────────────────────────────────
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ─── View Functions ─────────────────────────────────────────────────
 

@@ -2,8 +2,10 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ShellToken} from "../src/ShellToken.sol";
 import {GameCore} from "../src/GameCore.sol";
 import {Election} from "../src/Election.sol";
@@ -31,9 +33,25 @@ contract GameCoreTest is Test {
 
     function setUp() public {
         shell = new ShellToken();
-        game = new GameCore(address(shell));
-        election = new Election(address(game));
-        game.initialize(address(election));
+
+        // Deploy implementations
+        GameCore gameImpl = new GameCore();
+        Election electionImpl = new Election();
+
+        // Deploy GameCore proxy (election=address(0) initially)
+        game = GameCore(address(new ERC1967Proxy(
+            address(gameImpl),
+            abi.encodeWithSelector(GameCore.initialize.selector, address(shell), address(0), address(this))
+        )));
+
+        // Deploy Election proxy
+        election = Election(address(new ERC1967Proxy(
+            address(electionImpl),
+            abi.encodeWithSelector(Election.initialize.selector, address(game), address(this))
+        )));
+
+        // Set election on GameCore
+        game.setElection(address(election));
 
         // Fund game with SHELL for treasury yield backing
         shell.transfer(address(game), 750_000_000 * 1e18);
@@ -777,7 +795,7 @@ contract GameCoreTest is Test {
 
     function test_Pause_OnlyOwner() public {
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, alice));
         game.pause();
     }
 
@@ -785,7 +803,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, alice));
         game.unpause();
     }
 
@@ -812,12 +830,12 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, alice));
         game.emergencyWithdrawShell();
     }
 
     function test_EmergencyWithdrawShell_RequiresPaused() public {
-        vm.expectRevert(Pausable.ExpectedPause.selector);
+        vm.expectRevert(PausableUpgradeable.ExpectedPause.selector);
         game.emergencyWithdrawShell();
     }
 
@@ -825,7 +843,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(alice);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         game.enter(500 * 1e18);
     }
 
@@ -836,7 +854,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(alice);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         game.deposit(100 * 1e18);
     }
 
@@ -847,7 +865,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(alice);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         game.withdraw(1000 * 1e18);
     }
 
@@ -858,7 +876,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(alice);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         game.settleTax();
     }
 
@@ -869,7 +887,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(alice);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         game.claimReward();
     }
 
@@ -877,7 +895,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(bob);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         game.purge(alice);
     }
 
@@ -885,7 +903,7 @@ contract GameCoreTest is Test {
         game.pause();
 
         vm.prank(bob);
-        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         game.settleDelinquent(alice);
     }
 
@@ -945,11 +963,50 @@ contract GameCoreTest is Test {
         assertEq(remaining, 470_000 * 1e18 - krillAmount);
     }
 
-    // ─── AlreadyInitialized ─────────────────────────────────────────────
+    // ─── Initialize / Upgrade Tests ─────────────────────────────────────
 
     function test_Initialize_OnlyOnce() public {
-        vm.expectRevert(GameCore.AlreadyInitialized.selector);
-        game.initialize(address(election));
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        game.initialize(address(shell), address(election), address(this));
+    }
+
+    function test_SetElection_OnlyOnce() public {
+        vm.expectRevert(GameCore.ElectionAlreadySet.selector);
+        game.setElection(address(0x123));
+    }
+
+    function test_Upgrade_OnlyOwner() public {
+        GameCore newImpl = new GameCore();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, alice));
+        game.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_Upgrade_PreservesState() public {
+        // Enter a player
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        uint256 balBefore = game.getEffectiveBalance(alice);
+        uint256 playersBefore = game.activePlayers();
+
+        // Upgrade
+        GameCore newImpl = new GameCore();
+        game.upgradeToAndCall(address(newImpl), "");
+
+        // State preserved
+        assertEq(game.getEffectiveBalance(alice), balBefore);
+        assertEq(game.activePlayers(), playersBefore);
+        assertTrue(game.isActivePlayer(alice));
+        assertEq(game.owner(), address(this));
+    }
+
+    function test_Implementation_CannotBeInitialized() public {
+        GameCore impl = new GameCore();
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        impl.initialize(address(shell), address(election), address(this));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────

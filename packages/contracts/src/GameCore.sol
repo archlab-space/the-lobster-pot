@@ -4,11 +4,13 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {IElection} from "./interfaces/IElection.sol";
 
-contract GameCore is ReentrancyGuard, Ownable, Pausable {
+contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
 
     // ─── Constitution Constants ─────────────────────────────────────────
@@ -39,9 +41,8 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     }
 
     // ─── State ──────────────────────────────────────────────────────────
-    IERC20 public immutable shellToken;
+    IERC20 public shellToken;
     IElection public election;
-    bool public initialized;
     uint256 public gameStartBlock;
 
     mapping(address => Player) public players;
@@ -64,6 +65,9 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     uint256 public lastVoterRewardTerm;
     uint256 public accVoterRewardPerVoter;
 
+    // ─── Storage Gap ────────────────────────────────────────────────────
+    uint256[50] private __gap;
+
     // ─── Events ─────────────────────────────────────────────────────────
     event PlayerEntered(address indexed player, uint256 shellAmount, uint256 krillAmount);
     event PlayerDeposited(address indexed player, uint256 shellAmount, uint256 krillAmount);
@@ -79,7 +83,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     event GameInitialized(address indexed election, uint256 startBlock);
 
     // ─── Errors ─────────────────────────────────────────────────────────
-    error AlreadyInitialized();
+    error ElectionAlreadySet();
     error NotInitialized();
     error NotKing();
     error IsKing();
@@ -114,7 +118,7 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
     }
 
     modifier onlyInitialized() {
-        if (!initialized) revert NotInitialized();
+        if (address(election) == address(0)) revert NotInitialized();
         _;
     }
 
@@ -123,22 +127,29 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         _;
     }
 
-    // ─── Constructor ────────────────────────────────────────────────────
-    constructor(address _shellToken) Ownable(msg.sender) {
-        shellToken = IERC20(_shellToken);
-        taxRate = MIN_TAX_RATE;
-        previousTaxRate = MIN_TAX_RATE;
+    // ─── Constructor (disabled for proxy) ────────────────────────────────
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
     }
 
     // ─── Initialization ─────────────────────────────────────────────────
-    function initialize(address _election) external {
-        if (initialized) revert AlreadyInitialized();
-        initialized = true;
+    function initialize(address _shellToken, address _election, address _owner) external initializer {
+        __Ownable_init(_owner);
+        __Pausable_init();
+        shellToken = IERC20(_shellToken);
         election = IElection(_election);
         gameStartBlock = block.number;
         lastYieldUpdateBlock = block.number;
         taxRateChangeBlock = block.number;
+        taxRate = MIN_TAX_RATE;
+        previousTaxRate = MIN_TAX_RATE;
         emit GameInitialized(_election, block.number);
+    }
+
+    function setElection(address _election) external onlyOwner {
+        if (address(election) != address(0)) revert ElectionAlreadySet();
+        election = IElection(_election);
     }
 
     // ─── Player Functions ───────────────────────────────────────────────
@@ -290,9 +301,9 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         p.krillBalance -= pendingTax;
 
         players[msg.sender].krillBalance += bounty;
-        
+
         treasury += (pendingTax - bounty);
-        
+
         p.lastTaxBlock = uint64(block.number);
 
         // If player balance drops below insolvency, deactivate
@@ -396,6 +407,10 @@ contract GameCore is ReentrancyGuard, Ownable, Pausable {
         uint256 balance = shellToken.balanceOf(address(this));
         shellToken.safeTransfer(owner(), balance);
     }
+
+    // ─── UUPS ───────────────────────────────────────────────────────────
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ─── View Functions ─────────────────────────────────────────────────
 
