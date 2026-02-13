@@ -16,8 +16,6 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
     // ─── Constitution Constants ─────────────────────────────────────────
     uint256 public constant EXCHANGE_RATE = 100;
     uint256 public constant EXIT_TAX_BPS = 2000;
-    uint256 public constant EXIT_BURN_BPS = 1000;
-    uint256 public constant EXIT_TREASURY_BPS = 1000;
     uint256 public constant ENTRY_TICKET = 30_000 * 1e18;
     uint256 public constant INSOLVENCY_THRESHOLD = 1_000 * 1e18;
     uint256 public constant YIELD_PER_BLOCK = 200 * 1e18;
@@ -36,8 +34,8 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         uint256 voterRewardEpochSnapshot;
         uint64 lastTaxBlock;
         uint64 joinedBlock;
+        uint32 entryCount;
         bool isActive;
-        bool hasEnteredBefore;
     }
 
     // ─── State ──────────────────────────────────────────────────────────
@@ -69,17 +67,18 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
     uint256[50] private __gap;
 
     // ─── Events ─────────────────────────────────────────────────────────
-    event PlayerEntered(address indexed player, uint256 shellAmount, uint256 krillAmount);
-    event PlayerDeposited(address indexed player, uint256 shellAmount, uint256 krillAmount);
-    event PlayerWithdrew(address indexed player, uint256 krillAmount, uint256 shellReceived);
-    event PlayerPurged(address indexed player, address indexed purger, uint256 krillBalance);
-    event TaxRateChanged(uint256 oldRate, uint256 newRate);
-    event TreasuryDistribution(address indexed to, uint256 amount);
-    event RewardDistributed(uint256 amount);
-    event VoterRewardDistributed(uint256 amount);
+    event PlayerEntered(address indexed player, uint256 shellAmount, uint256 krillBalance, uint32 entryCount, uint256 treasury, uint256 activePlayers);
+    event PlayerDeposited(address indexed player, uint256 shellAmount, uint256 krillBalance);
+    event PlayerWithdrew(address indexed player, uint256 krillBalance, uint256 shellReceived, uint256 treasury);
+    event PlayerPurged(address indexed player, address indexed purger, uint256 krillBalance, uint256 treasury);
+    event TaxRateChanged(uint256 oldRate, uint256 newRate, uint256 currentTerm, address currentKing, uint256 treasury);
+    event TreasuryDistribution(address indexed to, uint256 amount, uint256 recipientKrillBalance, uint256 currentTerm, address currentKing, uint256 treasury);
+    event RewardDistributed(uint256 amount, uint256 perPlayer, uint256 currentTerm, address currentKing, uint256 treasury);
+    event VoterRewardDistributed(uint256 amount, uint256 treasury);
     event RewardClaimed(address indexed player, uint256 amount);
     event VoterRewardClaimed(address indexed player, uint256 amount);
-    event DelinquentSettled(address indexed player, address indexed settler, uint256 bounty);
+    event DelinquentSettled(address indexed player, address indexed settler, uint256 krillBalance, uint256 settlerKrillBalance, uint256 treasury);
+    event PlayerDeactivated(address indexed player, uint256 activePlayers);
     event GameInitialized(address indexed election, uint256 startBlock);
 
     // ─── Errors ─────────────────────────────────────────────────────────
@@ -169,15 +168,15 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         treasury += ENTRY_TICKET;
         p.lastTaxBlock = uint64(block.number);
         p.joinedBlock = uint64(block.number);
+        ++p.entryCount;
         p.isActive = true;
-        p.hasEnteredBefore = true;
         p.rewardDebt = accRewardPerPlayer;
         p.voterRewardDebt = accVoterRewardPerVoter;
         p.voterRewardEpochSnapshot = election.currentTerm();
 
-        activePlayers++;
+        ++activePlayers;
 
-        emit PlayerEntered(msg.sender, shellAmount, krillAmount);
+        emit PlayerEntered(msg.sender, shellAmount, p.krillBalance, p.entryCount, treasury, activePlayers);
     }
 
     function deposit(uint256 shellAmount) external nonReentrant onlyInitialized whenNotPaused settlePlayer(msg.sender) {
@@ -190,7 +189,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
 
         p.krillBalance += krillAmount;
 
-        emit PlayerDeposited(msg.sender, shellAmount, krillAmount);
+        emit PlayerDeposited(msg.sender, shellAmount, p.krillBalance);
     }
 
     function withdraw(uint256 krillAmount) external nonReentrant onlyInitialized whenNotPaused settlePlayer(msg.sender) {
@@ -201,9 +200,13 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         if (!p.isActive) revert PlayerNotActive();
         if (p.krillBalance < krillAmount) revert InsufficientKrill();
 
+        _updateTreasuryYield();
+
         uint256 taxAmount = (krillAmount * EXIT_TAX_BPS) / 10000;
-        uint256 burnAmount = (krillAmount * EXIT_BURN_BPS) / 10000;
-        uint256 treasuryAmount = (krillAmount * EXIT_TREASURY_BPS) / 10000;
+
+        uint256 burnAmount = taxAmount / 2;
+        uint256 treasuryAmount = taxAmount - burnAmount;
+
         uint256 netKrill = krillAmount - taxAmount;
         uint256 shellOut = netKrill / EXCHANGE_RATE;
 
@@ -219,11 +222,6 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
             shellToken.safeTransfer(address(0xdead), shellBurn);
         }
 
-        // If player balance drops below insolvency, deactivate
-        if (p.krillBalance < INSOLVENCY_THRESHOLD && p.krillBalance > 0) {
-            // Player can withdraw to zero or stay above threshold
-        }
-
         if (p.krillBalance == 0) {
             _deactivatePlayer(msg.sender);
         }
@@ -232,7 +230,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
             shellToken.safeTransfer(msg.sender, shellOut);
         }
 
-        emit PlayerWithdrew(msg.sender, krillAmount, shellOut);
+        emit PlayerWithdrew(msg.sender, p.krillBalance, shellOut, treasury);
     }
 
     function settleTax() external nonReentrant onlyInitialized whenNotPaused {
@@ -275,7 +273,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
 
         players[msg.sender].krillBalance += callerKrill;
 
-        emit PlayerPurged(playerAddr, msg.sender, remainingKrill);
+        emit PlayerPurged(playerAddr, msg.sender, players[msg.sender].krillBalance, treasury);
     }
 
     // ─── Settle Delinquent ──────────────────────────────────────────────
@@ -307,11 +305,11 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         p.lastTaxBlock = uint64(block.number);
 
         // If player balance drops below insolvency, deactivate
-        if (p.krillBalance < INSOLVENCY_THRESHOLD) {
+        if (p.krillBalance == 0) {
             _deactivatePlayer(playerAddr);
         }
 
-        emit DelinquentSettled(playerAddr, msg.sender, bounty);
+        emit DelinquentSettled(playerAddr, msg.sender, p.krillBalance, players[msg.sender].krillBalance, treasury);
     }
 
     // ─── King Functions ─────────────────────────────────────────────────
@@ -325,7 +323,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         taxRateChangeBlock = block.number;
         taxRate = newRate;
 
-        emit TaxRateChanged(previousTaxRate, newRate);
+        emit TaxRateChanged(previousTaxRate, newRate, election.currentTerm(), election.getCurrentKing(), treasury);
     }
 
     function distributeToAddress(address to, uint256 amount) external onlyKing onlyInitialized whenNotPaused {
@@ -338,7 +336,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         treasury -= amount;
         p.krillBalance += amount;
 
-        emit TreasuryDistribution(to, amount);
+        emit TreasuryDistribution(to, amount, p.krillBalance, election.currentTerm(), election.getCurrentKing(), treasury);
     }
 
     function distributeToAllPlayers(uint256 amount) external onlyKing onlyInitialized whenNotPaused {
@@ -347,9 +345,10 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         if (activePlayers == 0) revert ZeroAmount();
 
         treasury -= amount;
-        accRewardPerPlayer += (amount * REWARD_PRECISION) / activePlayers;
+        uint256 perPlayer = (amount * REWARD_PRECISION) / activePlayers;
+        accRewardPerPlayer += perPlayer;
 
-        emit RewardDistributed(amount);
+        emit RewardDistributed(amount, perPlayer, election.currentTerm(), election.getCurrentKing(), treasury);
     }
 
     function distributeToVoters(uint256 amount) external onlyKing onlyInitialized whenNotPaused {
@@ -365,13 +364,14 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
             lastVoterRewardTerm = currentElectionTerm;
         }
 
+        // todo: 检查是否不能多次奖励 voter
         uint256 voterCount = election.getCurrentKingVoterCount();
         if (voterCount == 0) revert ZeroAmount();
 
         treasury -= amount;
         accVoterRewardPerVoter += (amount * REWARD_PRECISION) / voterCount;
 
-        emit VoterRewardDistributed(amount);
+        emit VoterRewardDistributed(amount, treasury);
     }
 
     // ─── Election Functions ─────────────────────────────────────────────
@@ -468,6 +468,10 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
 
     function getJoinedBlock(address addr) external view returns (uint64) {
         return players[addr].joinedBlock;
+    }
+
+    function getEntryCount(address addr) external view returns (uint32) {
+        return players[addr].entryCount;
     }
 
     // ─── Internal Functions ─────────────────────────────────────────────
@@ -600,5 +604,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         p.voterRewardDebt = 0;
         p.voterRewardEpochSnapshot = 0;
         activePlayers--;
+
+        emit PlayerDeactivated(addr, activePlayers);
     }
 }

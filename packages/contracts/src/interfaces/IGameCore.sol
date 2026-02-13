@@ -7,6 +7,7 @@ interface IGameCore {
     function isActivePlayer(address player) external view returns (bool);
     function krillBalanceOf(address player) external view returns (uint256);
     function getJoinedBlock(address player) external view returns (uint64);
+    function getEntryCount(address player) external view returns (uint32);
     function deductKrill(address player, uint256 amount) external;
     function creditKrill(address player, uint256 amount) external;
     function king() external view returns (address);

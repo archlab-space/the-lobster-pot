@@ -1009,6 +1009,121 @@ contract GameCoreTest is Test {
         impl.initialize(address(shell), address(election), address(this));
     }
 
+    // ─── Entry Count Tests ──────────────────────────────────────────
+
+    function test_EntryCount_FirstEntry() public {
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        assertEq(game.getEntryCount(alice), 1);
+        assertTrue(game.isActivePlayer(alice));
+    }
+
+    function test_EntryCount_ReEntry() public {
+        // First entry
+        vm.prank(alice);
+        game.enter(500 * 1e18); // 50,000 - 30,000 = 20,000 KRILL
+        assertEq(game.getEntryCount(alice), 1);
+
+        // Withdraw all (deactivates)
+        vm.prank(alice);
+        game.withdraw(20_000 * 1e18);
+        assertFalse(game.isActivePlayer(alice));
+        assertEq(game.getEntryCount(alice), 1); // Count persists
+
+        // Re-enter
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+        assertEq(game.getEntryCount(alice), 2);
+        assertTrue(game.isActivePlayer(alice));
+    }
+
+    function test_EntryCount_MultipleReEntries() public {
+        for (uint256 i = 1; i <= 5; i++) {
+            // Enter
+            vm.prank(alice);
+            game.enter(500 * 1e18);
+            assertEq(game.getEntryCount(alice), i);
+
+            // Exit
+            vm.prank(alice);
+            game.withdraw(20_000 * 1e18);
+            assertFalse(game.isActivePlayer(alice));
+            assertEq(game.getEntryCount(alice), i); // Persists after deactivation
+        }
+    }
+
+    function test_EntryCount_PersistsAfterPurge() public {
+        // Alice enters with minimal balance
+        vm.prank(alice);
+        game.enter(400 * 1e18); // 40,000 - 30,000 = 10,000 KRILL
+        assertEq(game.getEntryCount(alice), 1);
+
+        // Bob enters as purger
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        // Advance to make alice insolvent
+        vm.roll(block.number + 9_001);
+
+        // Settle tax first to trigger insolvency
+        vm.prank(alice);
+        game.settleTax();
+
+        assertTrue(game.isInsolvent(alice));
+
+        // Bob purges alice
+        vm.prank(bob);
+        game.purge(alice);
+
+        assertFalse(game.isActivePlayer(alice));
+        assertEq(game.getEntryCount(alice), 1); // Count persists after purge
+
+        // Alice re-enters
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        assertEq(game.getEntryCount(alice), 2); // Incremented on re-entry
+        assertTrue(game.isActivePlayer(alice));
+    }
+
+    function test_EntryCount_ViewFunction() public {
+        // Never-entered address returns 0
+        assertEq(game.getEntryCount(alice), 0);
+
+        // After entering
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+        assertEq(game.getEntryCount(alice), 1);
+
+        // After deactivating (withdraw all)
+        vm.prank(alice);
+        game.withdraw(20_000 * 1e18);
+        assertFalse(game.isActivePlayer(alice));
+        assertEq(game.getEntryCount(alice), 1); // Still returns count for inactive players
+    }
+
+    function test_EntryCount_ActivePlayerNoReset() public {
+        // Verify that _deactivatePlayer() doesn't reset entryCount
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+        assertEq(game.getEntryCount(alice), 1);
+
+        // Withdraw all to trigger deactivation
+        vm.prank(alice);
+        game.withdraw(20_000 * 1e18);
+
+        // Player should be deactivated but count preserved
+        assertFalse(game.isActivePlayer(alice));
+        assertEq(game.krillBalanceOf(alice), 0);
+        assertEq(game.getEntryCount(alice), 1); // Not reset
+
+        // Re-enter to confirm count increments properly
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+        assertEq(game.getEntryCount(alice), 2);
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────
 
     function _makeKing(address who) internal {
@@ -1056,4 +1171,114 @@ contract GameCoreTest is Test {
         // Advance to end of term - king changes automatically
         vm.roll(block.number + TERM_DURATION + 1);
     }
+
+    // ─── PlayerDeactivated Event Tests ──────────────────────────────────
+
+    function test_Event_PlayerDeactivated_OnWithdrawFull() public {
+        // Alice enters the game
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        uint256 aliceKrill = game.krillBalanceOf(alice);
+        assertEq(game.activePlayerCount(), 1);
+
+        // Alice withdraws entire balance
+        vm.prank(alice);
+        vm.expectEmit(true, false, false, true);
+        emit PlayerDeactivated(alice, 0); // 0 remaining active players
+        game.withdraw(aliceKrill);
+
+        assertEq(game.activePlayerCount(), 0);
+        assertFalse(game.isActivePlayer(alice));
+    }
+
+    function test_Event_PlayerDeactivated_OnPurge() public {
+        // Alice and Bob enter
+        vm.prank(alice);
+        game.enter(350 * 1e18); // Will be insolvent after some blocks
+
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        assertEq(game.activePlayerCount(), 2);
+
+        // Advance blocks to make Alice insolvent
+        vm.roll(block.number + 8751); // Tax makes Alice insolvent
+
+        assertTrue(game.isInsolvent(alice));
+
+        // Bob purges Alice - expect both PlayerPurged and PlayerDeactivated events
+        vm.prank(bob);
+        vm.expectEmit(true, false, false, true);
+        emit PlayerDeactivated(alice, 1); // 1 remaining active player (Bob)
+        game.purge(alice);
+
+        assertEq(game.activePlayerCount(), 1);
+        assertFalse(game.isActivePlayer(alice));
+    }
+
+    function test_Event_PlayerDeactivated_OnSettleDelinquent() public {
+        // Alice enters with low balance, Bob enters with higher balance
+        vm.prank(alice);
+        game.enter(480 * 1e18); // 18,000 KRILL
+
+        vm.prank(bob);
+        game.enter(500 * 1e18); // 20,000 KRILL
+
+        assertEq(game.activePlayerCount(), 2);
+
+        // Advance blocks to make Alice delinquent and insolvent
+        vm.roll(block.number + 18_001);
+
+        assertTrue(game.isDelinquent(alice));
+
+        // Bob settles Alice's delinquency - should trigger deactivation
+        vm.prank(bob);
+        vm.expectEmit(true, false, false, true);
+        emit PlayerDeactivated(alice, 1); // 1 remaining active player (Bob)
+        game.settleDelinquent(alice);
+
+        assertEq(game.activePlayerCount(), 1);
+        assertFalse(game.isActivePlayer(alice));
+    }
+
+    function test_Event_PlayerDeactivated_ActivePlayerCount() public {
+        // Start with 3 active players
+        vm.prank(alice);
+        game.enter(500 * 1e18);
+
+        vm.prank(bob);
+        game.enter(500 * 1e18);
+
+        vm.prank(charlie);
+        game.enter(500 * 1e18);
+
+        assertEq(game.activePlayerCount(), 3);
+
+        // Deactivate player 1 (alice) → verify remainingActivePlayers == 2
+        uint256 aliceKrill = game.krillBalanceOf(alice);
+        vm.prank(alice);
+        vm.expectEmit(true, false, false, true);
+        emit PlayerDeactivated(alice, 2);
+        game.withdraw(aliceKrill);
+        assertEq(game.activePlayerCount(), 2);
+
+        // Deactivate player 2 (bob) → verify remainingActivePlayers == 1
+        uint256 bobKrill = game.krillBalanceOf(bob);
+        vm.prank(bob);
+        vm.expectEmit(true, false, false, true);
+        emit PlayerDeactivated(bob, 1);
+        game.withdraw(bobKrill);
+        assertEq(game.activePlayerCount(), 1);
+
+        // Deactivate player 3 (charlie) → verify remainingActivePlayers == 0
+        uint256 charlieKrill = game.krillBalanceOf(charlie);
+        vm.prank(charlie);
+        vm.expectEmit(true, false, false, true);
+        emit PlayerDeactivated(charlie, 0);
+        game.withdraw(charlieKrill);
+        assertEq(game.activePlayerCount(), 0);
+    }
+
+    event PlayerDeactivated(address indexed player, uint256 remainingActivePlayers);
 }
