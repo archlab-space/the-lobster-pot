@@ -9,7 +9,8 @@ import {Election} from "../src/Election.sol";
 
 contract Deploy is Script {
     function run() external {
-        address liquidityWallet = vm.envAddress("LIQUIDITY_WALLET");
+        address deployer = 0xC1a6A1DAA5A1aC828b6a5Ad1C59bc4bBF7be6723;
+        address owner = 0xe15863227482ed51e3ACB382C04deB5CeDb14535;
 
         vm.startBroadcast();
 
@@ -23,26 +24,30 @@ contract Deploy is Script {
         // 3. Deploy GameCore proxy (election set to address(0) initially)
         GameCore game = GameCore(address(new ERC1967Proxy(
             address(gameImpl),
-            abi.encodeWithSelector(GameCore.initialize.selector, address(shell), address(0), msg.sender)
+            abi.encodeWithSelector(GameCore.initialize.selector, address(shell), address(0), deployer)
         )));
 
         // 4. Deploy Election proxy
         Election election = Election(address(new ERC1967Proxy(
             address(electionImpl),
-            abi.encodeWithSelector(Election.initialize.selector, address(game), msg.sender)
+            abi.encodeWithSelector(Election.initialize.selector, address(game), deployer)
         )));
 
         // 5. Set election on GameCore (resolves circular dependency)
         game.setElection(address(election));
 
         // 6. Transfer 75% (750M) SHELL to GameCore proxy for treasury yield backing
-        shell.transfer(address(game), 750_000_000 * 1e18);
+        shell.transfer(address(game), 50_000_000 * 1e18);
 
-        // 7. Transfer 10% (100M) SHELL to liquidity wallet
-        shell.transfer(liquidityWallet, 100_000_000 * 1e18);
+        // 7. Transfer 25% (250M) SHELL to owner (team)
+        shell.transfer(owner, 950_000_000 * 1e18);
 
-        // 8. Remaining 15% (150M) stays with deployer (team)
+        // 8. Remaining 25% (250M) stays with deployer (team)
 
+        // 9. Transfer ownership of both proxies to owner
+        game.transferOwnership(owner);
+        election.transferOwnership(owner);
+        
         vm.stopBroadcast();
     }
 }
