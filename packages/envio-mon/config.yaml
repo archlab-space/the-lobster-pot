@@ -2,7 +2,7 @@
 name: envio-indexer
 networks:
 - id: 10143
-  start_block: 12701630
+  start_block: 12701618
   contracts:
   - name: GameCore
     address:
