@@ -59,6 +59,7 @@ contract Election is Initializable, ReentrancyGuard, OwnableUpgradeable, UUPSUpg
     error TooYoungToVote();
     error NoFundsToReclaim();
     error BribeCannotDecrease();
+    error InsufficientCampaignFunds();
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier whenGameNotPaused() {
@@ -165,7 +166,8 @@ contract Election is Initializable, ReentrancyGuard, OwnableUpgradeable, UUPSUpg
 
         // Pay bribe from campaign funds
         uint256 bribe;
-        if (c.campaignFunds >= c.bribePerVote && c.bribePerVote > 0) {
+        if (c.bribePerVote > 0) {
+            if (c.campaignFunds < c.bribePerVote) revert InsufficientCampaignFunds();
             bribe = c.bribePerVote;
             c.campaignFunds -= bribe;
             game.creditKrill(msg.sender, bribe);

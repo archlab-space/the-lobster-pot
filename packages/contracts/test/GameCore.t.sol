@@ -1205,6 +1205,9 @@ contract GameCoreTest is Test {
         // Advance blocks to make Alice insolvent
         vm.roll(block.number + 8751); // Tax makes Alice insolvent
 
+        vm.prank(alice);
+        game.settleTax(); // Settle tax to trigger insolvency
+
         assertTrue(game.isInsolvent(alice));
 
         // Bob purges Alice - expect both PlayerPurged and PlayerDeactivated events

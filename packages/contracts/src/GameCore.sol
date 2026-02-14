@@ -69,17 +69,21 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
     // ─── Events ─────────────────────────────────────────────────────────
     event PlayerEntered(address indexed player, uint256 shellAmount, uint256 krillBalance, uint32 entryCount, uint256 treasury, uint256 activePlayers);
     event PlayerDeposited(address indexed player, uint256 shellAmount, uint256 krillBalance);
-    event PlayerWithdrew(address indexed player, uint256 krillBalance, uint256 shellReceived, uint256 treasury);
-    event PlayerPurged(address indexed player, address indexed purger, uint256 krillBalance, uint256 treasury);
+    event PlayerWithdrew(address indexed player, uint256 remainingKrill, uint256 shellReceived, uint256 treasury);
+    event PlayerPurged(address indexed player, address indexed purger, uint256 purgerKrillBalance, uint256 treasury);
     event TaxRateChanged(uint256 oldRate, uint256 newRate, uint256 currentTerm, address currentKing, uint256 treasury);
     event TreasuryDistribution(address indexed to, uint256 amount, uint256 recipientKrillBalance, uint256 currentTerm, address currentKing, uint256 treasury);
     event RewardDistributed(uint256 amount, uint256 perPlayer, uint256 currentTerm, address currentKing, uint256 treasury);
-    event VoterRewardDistributed(uint256 amount, uint256 treasury);
-    event RewardClaimed(address indexed player, uint256 amount);
-    event VoterRewardClaimed(address indexed player, uint256 amount);
-    event DelinquentSettled(address indexed player, address indexed settler, uint256 krillBalance, uint256 settlerKrillBalance, uint256 treasury);
+    event VoterRewardDistributed(uint256 amount, uint256 perVoter, uint256 currentTerm, address currentKing, uint256 treasury);
+    event RewardClaimed(address indexed player, uint256 claimedAmount, uint256 krillBalance, uint256 treasury);
+    event taxSettled(address indexed player, uint256 taxPaid, uint256 remainingKrill, uint256 treasury);
+    event DelinquentSettled(address indexed player, address indexed settler, uint256 remainingKrill, uint256 settlerKrillBalance, uint256 treasury);
     event PlayerDeactivated(address indexed player, uint256 activePlayers);
     event GameInitialized(address indexed election, uint256 startBlock);
+    event TreasuryCredited(uint256 amount, uint256 treasury);
+
+    event KrillDeducted(address indexed player, uint256 amount, uint256 remainingKrill);
+    event KrillCredited(address indexed player, uint256 amount, uint256 krillBalance);
 
     // ─── Errors ─────────────────────────────────────────────────────────
     error ElectionAlreadySet();
@@ -193,8 +197,6 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
     }
 
     function withdraw(uint256 krillAmount) external nonReentrant onlyInitialized whenNotPaused settlePlayer(msg.sender) {
-        _claimRewards(msg.sender);
-
         if (krillAmount == 0) revert ZeroAmount();
         Player storage p = players[msg.sender];
         if (!p.isActive) revert PlayerNotActive();
@@ -364,14 +366,14 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
             lastVoterRewardTerm = currentElectionTerm;
         }
 
-        // todo: 检查是否不能多次奖励 voter
         uint256 voterCount = election.getCurrentKingVoterCount();
         if (voterCount == 0) revert ZeroAmount();
 
         treasury -= amount;
-        accVoterRewardPerVoter += (amount * REWARD_PRECISION) / voterCount;
+        uint256 perPlayer = (amount * REWARD_PRECISION) / voterCount;
+        accVoterRewardPerVoter += perPlayer;
 
-        emit VoterRewardDistributed(amount, treasury);
+        emit VoterRewardDistributed(amount, perPlayer, election.currentTerm(), election.getCurrentKing(), treasury);
     }
 
     // ─── Election Functions ─────────────────────────────────────────────
@@ -381,16 +383,22 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         if (!p.isActive) revert PlayerNotActive();
         if (p.krillBalance < amount) revert InsufficientKrill();
         p.krillBalance -= amount;
+
+        emit KrillDeducted(player, amount, p.krillBalance);
     }
 
     function creditKrill(address player, uint256 amount) external onlyElection whenNotPaused {
         Player storage p = players[player];
         if (!p.isActive) revert PlayerNotActive();
         p.krillBalance += amount;
+
+        emit KrillCredited(player, amount, p.krillBalance);
     }
 
     function creditTreasury(uint256 amount) external onlyElection whenNotPaused {
         treasury += amount;
+
+        emit TreasuryCredited(amount, treasury);
     }
 
     // ─── Admin Functions ──────────────────────────────────────────────────
@@ -413,6 +421,10 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ─── View Functions ─────────────────────────────────────────────────
+
+    function activePlayerCount() external view returns (uint256) {
+        return activePlayers;
+    }
 
     function king() public view returns (address) {
         return election.getCurrentKing();
@@ -504,6 +516,8 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
             }
         }
         p.lastTaxBlock = uint64(block.number);
+
+        emit taxSettled(addr, pendingTax, p.krillBalance, treasury);
     }
 
     function _claimRewards(address addr) internal {
@@ -522,6 +536,8 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         }
         p.voterRewardDebt = accVoterRewardPerVoter;
         p.voterRewardEpochSnapshot = election.currentTerm(); // Store current term
+
+        emit RewardClaimed(addr, pending + voterPending, p.krillBalance, treasury);
     }
 
     function _settlePlayer(address addr) internal {

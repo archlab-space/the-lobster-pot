@@ -254,7 +254,7 @@ contract ElectionTest is Test {
         assertEq(bribePerVote, 200 * 1e18);
     }
 
-    function test_UpdateBribePerVote_InsufficientFundsStillSucceeds() public {
+    function test_UpdateBribePerVote_InsufficientFundsReverts() public {
         _creditForRegistration(alice);
         vm.prank(alice);
         election.startCampaign(50 * 1e18);
@@ -273,12 +273,10 @@ contract ElectionTest is Test {
         // Advance past voter age and vote
         vm.roll(block.number + MIN_VOTER_AGE + 1);
 
-        // Bob votes but gets 0 bribe (insufficient funds)
-        uint256 bobBalanceBefore = game.krillBalanceOf(bob);
+        // Bob's vote should revert (insufficient funds)
         vm.prank(bob);
+        vm.expectRevert(Election.InsufficientCampaignFunds.selector);
         election.vote(alice);
-        uint256 bobBalanceAfter = game.krillBalanceOf(bob);
-        assertEq(bobBalanceAfter - bobBalanceBefore, 0); // No bribe paid
     }
 
     // ─── Voting Tests ───────────────────────────────────────────────────
@@ -369,11 +367,10 @@ contract ElectionTest is Test {
 
         vm.roll(block.number + MIN_VOTER_AGE + 1);
 
-        // Vote should still succeed, just no bribe paid
+        // Vote should revert due to insufficient funds
         vm.prank(bob);
+        vm.expectRevert(Election.InsufficientCampaignFunds.selector);
         election.vote(alice);
-
-        assertTrue(election.hasVoted(0, bob));
     }
 
     function test_Vote_PartialBribe() public {
@@ -391,13 +388,31 @@ contract ElectionTest is Test {
         vm.prank(bob);
         election.vote(alice);
 
-        // Second voter doesn't get bribe (funds exhausted)
+        // Second voter should revert (funds exhausted)
         vm.prank(charlie);
+        vm.expectRevert(Election.InsufficientCampaignFunds.selector);
         election.vote(alice);
 
-        // Both votes count
+        // Only first vote counted
         (uint256 voteCount,,,,) = _getCandidateInfo(0, alice);
-        assertEq(voteCount, 2);
+        assertEq(voteCount, 1);
+    }
+
+    function test_Vote_ZeroBribeWithNoFunds() public {
+        _creditForRegistration(alice);
+        vm.prank(alice);
+        election.startCampaign(0); // Zero bribe per vote
+
+        // Don't fund campaign at all (0 funds)
+
+        vm.roll(block.number + MIN_VOTER_AGE + 1);
+
+        // Vote should succeed even with no funds (bribePerVote is 0)
+        vm.prank(bob);
+        election.vote(alice);
+
+        assertTrue(election.hasVoted(0, bob));
+        assertEq(election.votedFor(0, bob), alice);
     }
 
     // ─── Real-Time King Tracking Tests ──────────────────────────────────
