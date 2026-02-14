@@ -1,0 +1,174 @@
+type Election_BribePerVoteUpdated {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  oldBribe: BigInt!
+  newBribe: BigInt!
+}
+
+type Election_CampaignFunded {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  amount: BigInt!
+}
+
+type Election_CampaignFundsReclaimed {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  amount: BigInt!
+}
+
+type Election_CampaignStarted {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  bribePerVote: BigInt!
+}
+
+type Election_VoteCast {
+  id: ID!
+  term: BigInt!
+  voter: String!
+  candidate: String!
+  bribe: BigInt!
+}
+
+type GameCore_DelinquentSettled {
+  id: ID!
+  player: String!
+  settler: String!
+  remainingKrill: BigInt!
+  settlerKrillBalance: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_GameInitialized {
+  id: ID!
+  election: String!
+  startBlock: BigInt!
+}
+
+type GameCore_KrillCredited {
+  id: ID!
+  player: String!
+  amount: BigInt!
+  krillBalance: BigInt!
+}
+
+type GameCore_KrillDeducted {
+  id: ID!
+  player: String!
+  amount: BigInt!
+  remainingKrill: BigInt!
+}
+
+type GameCore_Paused {
+  id: ID!
+  account: String!
+}
+
+type GameCore_PlayerDeactivated {
+  id: ID!
+  player: String!
+  activePlayers: BigInt!
+}
+
+type GameCore_PlayerDeposited {
+  id: ID!
+  player: String!
+  shellAmount: BigInt!
+  krillBalance: BigInt!
+}
+
+type GameCore_PlayerEntered {
+  id: ID!
+  player: String!
+  shellAmount: BigInt!
+  krillBalance: BigInt!
+  entryCount: BigInt!
+  treasury: BigInt!
+  activePlayers: BigInt!
+}
+
+type GameCore_PlayerPurged {
+  id: ID!
+  player: String!
+  purger: String!
+  purgerKrillBalance: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_PlayerWithdrew {
+  id: ID!
+  player: String!
+  remainingKrill: BigInt!
+  shellReceived: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_RewardClaimed {
+  id: ID!
+  player: String!
+  claimedAmount: BigInt!
+  krillBalance: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_RewardDistributed {
+  id: ID!
+  amount: BigInt!
+  perPlayer: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+
+type GameCore_TaxRateChanged {
+  id: ID!
+  oldRate: BigInt!
+  newRate: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+
+type GameCore_TaxSettled {
+  id: ID!
+  player: String!
+  taxPaid: BigInt!
+  remainingKrill: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_TreasuryCredited {
+  id: ID!
+  amount: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_TreasuryDistribution {
+  id: ID!
+  to: String!
+  amount: BigInt!
+  recipientKrillBalance: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+
+type GameCore_Unpaused {
+  id: ID!
+  account: String!
+}
+
+type GameCore_VoterRewardDistributed {
+  id: ID!
+  amount: BigInt!
+  perVoter: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+

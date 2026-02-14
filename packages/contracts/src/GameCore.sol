@@ -76,7 +76,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
     event RewardDistributed(uint256 amount, uint256 perPlayer, uint256 currentTerm, address currentKing, uint256 treasury);
     event VoterRewardDistributed(uint256 amount, uint256 perVoter, uint256 currentTerm, address currentKing, uint256 treasury);
     event RewardClaimed(address indexed player, uint256 claimedAmount, uint256 krillBalance, uint256 treasury);
-    event taxSettled(address indexed player, uint256 taxPaid, uint256 remainingKrill, uint256 treasury);
+    event TaxSettled(address indexed player, uint256 taxPaid, uint256 remainingKrill, uint256 treasury);
     event DelinquentSettled(address indexed player, address indexed settler, uint256 remainingKrill, uint256 settlerKrillBalance, uint256 treasury);
     event PlayerDeactivated(address indexed player, uint256 activePlayers);
     event GameInitialized(address indexed election, uint256 startBlock);
@@ -517,7 +517,7 @@ contract GameCore is Initializable, ReentrancyGuard, OwnableUpgradeable, Pausabl
         }
         p.lastTaxBlock = uint64(block.number);
 
-        emit taxSettled(addr, pendingTax, p.krillBalance, treasury);
+        emit TaxSettled(addr, pendingTax, p.krillBalance, treasury);
     }
 
     function _claimRewards(address addr) internal {

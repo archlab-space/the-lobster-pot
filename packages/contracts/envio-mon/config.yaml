@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+name: envio-indexer
+networks:
+- id: 10143
+  start_block: 0
+  contracts:
+  - name: GameCore
+    address:
+    - 0x78ab3a36B4DD7bB2AD45808F9C5dAe9a1c075C19
+    handler: src/EventHandlers.ts
+    events:
+    - event: DelinquentSettled(address indexed player, address indexed settler, uint256 remainingKrill, uint256 settlerKrillBalance, uint256 treasury)
+    - event: GameInitialized(address indexed election, uint256 startBlock)
+    - event: KrillCredited(address indexed player, uint256 amount, uint256 krillBalance)
+    - event: KrillDeducted(address indexed player, uint256 amount, uint256 remainingKrill)
+    - event: Paused(address account)
+    - event: PlayerDeactivated(address indexed player, uint256 activePlayers)
+    - event: PlayerDeposited(address indexed player, uint256 shellAmount, uint256 krillBalance)
+    - event: PlayerEntered(address indexed player, uint256 shellAmount, uint256 krillBalance, uint32 entryCount, uint256 treasury, uint256 activePlayers)
+    - event: PlayerPurged(address indexed player, address indexed purger, uint256 purgerKrillBalance, uint256 treasury)
+    - event: PlayerWithdrew(address indexed player, uint256 remainingKrill, uint256 shellReceived, uint256 treasury)
+    - event: RewardClaimed(address indexed player, uint256 claimedAmount, uint256 krillBalance, uint256 treasury)
+    - event: RewardDistributed(uint256 amount, uint256 perPlayer, uint256 currentTerm, address currentKing, uint256 treasury)
+    - event: TaxRateChanged(uint256 oldRate, uint256 newRate, uint256 currentTerm, address currentKing, uint256 treasury)
+    - event: TaxSettled(address indexed player, uint256 taxPaid, uint256 remainingKrill, uint256 treasury)
+    - event: TreasuryCredited(uint256 amount, uint256 treasury)
+    - event: TreasuryDistribution(address indexed to, uint256 amount, uint256 recipientKrillBalance, uint256 currentTerm, address currentKing, uint256 treasury)
+    - event: Unpaused(address account)
+    - event: VoterRewardDistributed(uint256 amount, uint256 perVoter, uint256 currentTerm, address currentKing, uint256 treasury)
+  - name: Election
+    address:
+    - 0xa814d0189efba4547b78972b06433868823a28DF
+    handler: src/EventHandlers.ts
+    events:
+    - event: BribePerVoteUpdated(uint256 indexed term, address indexed candidate, uint256 oldBribe, uint256 newBribe)
+    - event: CampaignFunded(uint256 indexed term, address indexed candidate, uint256 amount)
+    - event: CampaignFundsReclaimed(uint256 indexed term, address indexed candidate, uint256 amount)
+    - event: CampaignStarted(uint256 indexed term, address indexed candidate, uint256 bribePerVote)
+    - event: VoteCast(uint256 indexed term, address indexed voter, address indexed candidate, uint256 bribe)
+unordered_multichain_mode: true
+preload_handlers: true

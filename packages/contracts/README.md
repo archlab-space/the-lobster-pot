@@ -47,8 +47,20 @@ $ anvil
 
 ### Deploy
 
+List all the accounts in the keystore default directory
+
+```shell
+$ cast wallet list
+```
+
 ```shell
 $ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+```
+
+Or
+
+```shell
+$ forge script script/Deploy.s.sol --account <your_keystore_account> --broadcast
 ```
 
 ### Cast
@@ -63,4 +75,24 @@ $ cast <subcommand>
 $ forge --help
 $ anvil --help
 $ cast --help
+```
+
+## Config envio indexer
+
+### New directory
+
+```shell
+$ mkdir envio-mon
+```
+
+### Create a empty pnpm-workspace.yaml file for isolating the envio-mon from the project workspace
+
+```shell
+$ touch pnpm-workspace.yaml
+```
+
+### Init
+
+```shell
+$ pnpx envio init
 ```
