@@ -230,6 +230,7 @@ type GlobalState {
   electionContract: String!
   lastUpdatedAt: BigInt!
   lastUpdatedBlock: BigInt!
+  isPaused: Boolean!
 }
 
 # Player: Aggregated player state with computed status fields

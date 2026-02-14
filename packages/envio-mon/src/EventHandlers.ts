@@ -78,14 +78,14 @@ function calculateEffectiveBalance(
 function calculatePlayerStatus(
   effectiveBalance: bigint,
   isActive: boolean,
-  isDelinquent: boolean
+  isDelinquent: boolean,
+  isInsolvent: boolean
 ): PlayerStatus {
   if (!isActive) return "DEAD";
   if (isDelinquent) return "DELINQUENT";
+  if (isInsolvent) return "INSOLVENT";
 
   const KRILL = BigInt(1e18);
-  const MIN_BALANCE = 1_000n * KRILL;
-  if (effectiveBalance < MIN_BALANCE) return "INSOLVENT";
 
   // Absolute thresholds based on game economics:
   // Min entry = 30k SHELL = 3M KRILL, so use fixed KRILL thresholds
@@ -129,6 +129,7 @@ async function getOrCreateGlobalState(
       electionContract: "",
       lastUpdatedAt: 0n,
       lastUpdatedBlock: 0n,
+      isPaused: false,
     };
   }
   return global;
@@ -190,11 +191,12 @@ function updatePlayerComputedFields(
     globalState.taxRateChangeBlock
   );
   player.isDelinquent = isDelinquent(player.lastTaxBlock, currentBlock);
-  player.isInsolvent = player.effectiveBalance < (1_000n * BigInt(1e18));
+  player.isInsolvent = player.krillBalance < (1_000n * BigInt(1e18));
   player.status = calculatePlayerStatus(
     player.effectiveBalance,
     player.isActive,
-    player.isDelinquent
+    player.isDelinquent,
+    player.isInsolvent
   );
   player.lastActivityBlock = currentBlock;
   player.updatedAt = timestamp;
@@ -751,6 +753,7 @@ GameCore.Paused.handler(async ({ event, context }) => {
 
   // Update GlobalState timestamp
   const globalState = await getOrCreateGlobalState(context);
+  globalState.isPaused = true;
   globalState.currentBlock = BigInt(event.block.number);
   globalState.lastUpdatedAt = BigInt(event.block.timestamp);
   globalState.lastUpdatedBlock = BigInt(event.block.number);
@@ -1354,6 +1357,7 @@ GameCore.Unpaused.handler(async ({ event, context }) => {
 
   // Update GlobalState timestamp
   const globalState = await getOrCreateGlobalState(context);
+  globalState.isPaused = false;
   globalState.currentBlock = BigInt(event.block.number);
   globalState.lastUpdatedAt = BigInt(event.block.timestamp);
   globalState.lastUpdatedBlock = BigInt(event.block.number);
