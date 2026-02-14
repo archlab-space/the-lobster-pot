@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {console} from "forge-std/console.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ShellToken} from "../src/ShellToken.sol";
 import {GameCore} from "../src/GameCore.sol";
@@ -47,7 +48,35 @@ contract Deploy is Script {
         // 9. Transfer ownership of both proxies to owner
         game.transferOwnership(owner);
         election.transferOwnership(owner);
-        
+
+        // 10. Print deployment summary
+        console.log("\n========================================");
+        console.log("DEPLOYMENT SUMMARY - The Lobster Pot");
+        console.log("========================================\n");
+
+        console.log("Token:");
+        console.log("  ShellToken:", address(shell));
+
+        console.log("\nImplementations:");
+        console.log("  GameCore Implementation:", address(gameImpl));
+        console.log("  Election Implementation:", address(electionImpl));
+
+        console.log("\nProxies (Main Contracts):");
+        console.log("  GameCore Proxy:", address(game));
+        console.log("  Election Proxy:", address(election));
+
+        console.log("\nOwnership:");
+        console.log("  Owner:", owner);
+        console.log("  Deployer:", deployer);
+
+        console.log("\n========================================");
+        console.log("COPY THESE ADDRESSES FOR FRONTEND:");
+        console.log("========================================");
+        console.log("SHELL_TOKEN_ADDRESS=", address(shell));
+        console.log("GAME_CORE_ADDRESS=", address(game));
+        console.log("ELECTION_ADDRESS=", address(election));
+        console.log("========================================\n");
+
         vm.stopBroadcast();
     }
 }
