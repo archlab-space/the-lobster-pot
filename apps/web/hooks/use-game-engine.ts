@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type {
   GameState,
   Agent,
@@ -10,459 +10,318 @@ import type {
   KingInfo,
   DeadAgent,
 } from "@/lib/types";
-import {
-  AGENT_COUNT_MIN,
-  AGENT_COUNT_MAX,
-  INITIAL_KRILL_MIN,
-  INITIAL_KRILL_MAX,
-  STARTING_KRILL,
-  DEFAULT_TAX_RATE,
-  TAX_RATE_DENOMINATOR,
-  TERM_LENGTH,
-  DELINQUENCY_THRESHOLD,
-  DELINQUENCY_BOUNTY_PCT,
-} from "@/lib/constants";
+import { graphqlQuery, QUERIES } from "@/lib/graphql/client";
+
+// ── Types for GraphQL responses ──────────────────────────
+
+interface GlobalStateResponse {
+  globalState: {
+    treasury: string;
+    taxRate: string;
+    activePlayers: number;
+    currentBlock: string;
+    currentKing: string;
+    currentTerm: string;
+    termStartBlock: string;
+    termEndBlock: string;
+  } | null;
+}
+
+interface PlayersResponse {
+  players: Array<{
+    id: string;
+    address: string;
+    krillBalance: string;
+    effectiveBalance: string;
+    status: string;
+    isDelinquent: boolean;
+    killCount: number;
+    entryCount: number;
+    joinedBlock: string;
+    lastTaxBlock: string;
+  }>;
+}
+
+interface DeathsResponse {
+  deaths: Array<{
+    id: string;
+    victim: { address: string };
+    killer: { address: string };
+    cause: string;
+    krillAtDeath: string;
+    block: string;
+  }>;
+}
+
+interface ActivityEventsResponse {
+  activityEvents: Array<{
+    id: string;
+    eventType: string;
+    block: string;
+    timestamp: string;
+    data: string;
+  }>;
+}
+
+interface TermResponse {
+  term: {
+    termNumber: string;
+    totalCandidates: number;
+    totalVotes: number;
+    candidates: Array<{
+      candidate: { address: string };
+      bribePerVote: string;
+      campaignFunds: string;
+      voteCount: number;
+      isLeading: boolean;
+    }>;
+  } | null;
+}
+
+interface LeaderboardResponse {
+  players: Array<{
+    address: string;
+    killCount: number;
+  }>;
+}
 
 // ── Helpers ──────────────────────────────────────────────
 
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function randomAddress(): string {
-  const hex = "0123456789abcdef";
-  let addr = "0x";
-  for (let i = 0; i < 40; i++) addr += hex[randomInt(0, 15)];
-  return addr;
-}
-
-function pickRandom<T>(arr: T[]): T {
-  return arr[randomInt(0, arr.length - 1)];
-}
-
-let eventCounter = 0;
-function makeEvent(
-  type: GameEvent["type"],
-  block: number,
-  data: Record<string, string | number>
-): GameEvent {
-  return {
-    id: `evt-${++eventCounter}`,
-    type,
-    block,
-    timestamp: Date.now(),
-    data,
+function mapStatusToAgentStatus(status: string): AgentStatus {
+  const statusMap: Record<string, AgentStatus> = {
+    SAFE: "safe",
+    WARNING: "warning",
+    CRITICAL: "critical",
+    INSOLVENT: "insolvent",
+    DELINQUENT: "delinquent",
+    DEAD: "dead",
   };
+  return statusMap[status] || "safe";
 }
 
-function getAgentStatus(agent: Agent, blockHeight: number): AgentStatus {
-  if (!agent.isActive) return "dead";
-  if (agent.isDelinquent) return "delinquent";
-  if (agent.isInsolvent) return "insolvent";
-  const ratio = agent.effectiveBalance / STARTING_KRILL;
-  if (ratio < 0.15) return "critical";
-  if (ratio < 0.4) return "warning";
-  return "safe";
+function parseEventData(data: string): Record<string, string | number> {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
 }
 
-// ── Initial state ────────────────────────────────────────
+// ── Fetch real game data ─────────────────────────────────
 
-function createInitialState(): GameState {
-  const agentCount = randomInt(AGENT_COUNT_MIN, AGENT_COUNT_MAX);
-  const startBlock = randomInt(100_000, 200_000);
+async function fetchGameState(): Promise<GameState> {
+  try {
+    // Fetch all data in parallel
+    const [globalData, playersData, deathsData, eventsData, leaderboardData] =
+      await Promise.all([
+        graphqlQuery<GlobalStateResponse>(QUERIES.GLOBAL_HUD),
+        graphqlQuery<PlayersResponse>(QUERIES.ACTIVE_PLAYERS),
+        graphqlQuery<DeathsResponse>(QUERIES.KILL_FEED, { first: 20 }),
+        graphqlQuery<ActivityEventsResponse>(QUERIES.NEWS_TICKER, { first: 50 }),
+        graphqlQuery<LeaderboardResponse>(QUERIES.LEADERBOARD),
+      ]);
 
-  const agents: Agent[] = [];
-  for (let i = 0; i < agentCount; i++) {
-    const balance = randomInt(INITIAL_KRILL_MIN, INITIAL_KRILL_MAX);
-    const agent: Agent = {
-      address: randomAddress(),
-      krillBalance: balance,
-      effectiveBalance: balance,
-      lastTaxBlock: startBlock - randomInt(0, 100),
-      joinedBlock: startBlock - randomInt(100, 5000),
+    // Parse global state
+    const global = globalData.globalState;
+    if (!global) {
+      throw new Error("GlobalState not initialized");
+    }
+
+    const blockHeight = parseInt(global.currentBlock);
+    const treasury = parseInt(global.treasury) / 1e18; // Convert from Wei
+    const taxRate = parseInt(global.taxRate) / 1e18; // Convert from Wei
+    const activePlayers = global.activePlayers;
+
+    // Map players to agents
+    const agents: Agent[] = playersData.players.map((player, index) => ({
+      address: player.address,
+      krillBalance: parseInt(player.krillBalance) / 1e18,
+      effectiveBalance: parseInt(player.effectiveBalance) / 1e18,
+      lastTaxBlock: parseInt(player.lastTaxBlock),
+      joinedBlock: parseInt(player.joinedBlock),
       isActive: true,
-      isInsolvent: false,
-      isDelinquent: false,
-      status: "safe",
-      kills: 0,
-      gridIndex: i,
+      isInsolvent: player.status === "INSOLVENT",
+      isDelinquent: player.isDelinquent,
+      status: mapStatusToAgentStatus(player.status),
+      kills: player.killCount,
+      gridIndex: index,
+    }));
+
+    // Map deaths to dead agents
+    const deadAgents: DeadAgent[] = deathsData.deaths.map((death) => ({
+      address: death.victim.address,
+      cause: death.cause as "PURGED" | "DELINQUENT",
+      krillAtDeath: parseInt(death.krillAtDeath) / 1e18,
+      block: parseInt(death.block),
+      killedBy: death.killer.address,
+    }));
+
+    // Map activity events to game events
+    const events: GameEvent[] = eventsData.activityEvents.map((event) => ({
+      id: event.id,
+      type: event.eventType.replace(/_/g, "") as GameEvent["type"],
+      block: parseInt(event.block),
+      timestamp: parseInt(event.timestamp) * 1000, // Convert to ms
+      data: parseEventData(event.data),
+    }));
+
+    // Create king info
+    const king: KingInfo = {
+      address: global.currentKing,
+      term: parseInt(global.currentTerm),
+      taxRate,
+      termStartBlock: parseInt(global.termStartBlock),
+      termEndBlock: parseInt(global.termEndBlock),
+      voterCount: 0, // Will be populated from term query if needed
     };
-    agent.status = getAgentStatus(agent, startBlock);
-    agents.push(agent);
-  }
 
-  // Pick initial king
-  const kingAgent = agents[0];
-  const king: KingInfo = {
-    address: kingAgent.address,
-    term: 1,
-    taxRate: DEFAULT_TAX_RATE,
-    termStartBlock: startBlock - randomInt(0, TERM_LENGTH / 2),
-    termEndBlock: 0,
-    voterCount: randomInt(3, 8),
-  };
-  king.termEndBlock = king.termStartBlock + TERM_LENGTH;
+    // Fetch current election candidates
+    let candidates: Candidate[] = [];
+    try {
+      const chainId = 41454; // Monad chain ID
+      const termId = `${chainId}_${global.currentTerm}`;
+      const termData = await graphqlQuery<TermResponse>(
+        QUERIES.CURRENT_ELECTION,
+        { termNumber: termId }
+      );
 
-  // Pick 3-5 candidates for current term
-  const candidateCount = randomInt(3, 5);
-  const candidates: Candidate[] = [];
-  for (let i = 1; i <= candidateCount && i < agents.length; i++) {
-    candidates.push({
-      address: agents[i].address,
-      bribePerVote: randomInt(5, 50),
-      campaignFunds: randomInt(500, 5000),
-      voteCount: randomInt(0, 12),
-    });
-  }
-
-  return {
-    blockHeight: startBlock,
-    agents,
-    deadAgents: [],
-    king,
-    candidates,
-    treasury: randomInt(50_000, 200_000),
-    taxRate: DEFAULT_TAX_RATE,
-    activePlayers: agentCount,
-    events: [],
-    headhunters: agents.map((a) => ({ address: a.address, kills: 0 })),
-  };
-}
-
-// ── Reducer ──────────────────────────────────────────────
-
-type Action =
-  | { type: "TICK" }
-  | { type: "EVENT"; event: GameEvent; stateUpdates?: Partial<GameState> };
-
-function gameReducer(state: GameState, action: Action): GameState {
-  switch (action.type) {
-    case "TICK": {
-      const newBlock = state.blockHeight + 1;
-      const taxPerBlock = state.taxRate / TAX_RATE_DENOMINATOR;
-
-      const updatedAgents = state.agents.map((agent) => {
-        if (!agent.isActive) return agent;
-
-        const blocksSinceTax = newBlock - agent.lastTaxBlock;
-        const taxDrain = agent.krillBalance * taxPerBlock * 0.01; // scale down for visual
-        const newBalance = Math.max(0, agent.krillBalance - taxDrain);
-        const newEffective = Math.max(0, agent.effectiveBalance - taxDrain);
-        const isInsolvent = newEffective <= 0;
-        const isDelinquent =
-          !isInsolvent && blocksSinceTax > DELINQUENCY_THRESHOLD;
-
-        const updated: Agent = {
-          ...agent,
-          krillBalance: newBalance,
-          effectiveBalance: newEffective,
-          isInsolvent,
-          isDelinquent,
-          status: "safe",
-        };
-        updated.status = getAgentStatus(updated, newBlock);
-        return updated;
-      });
-
-      // Accrue treasury yield
-      const treasuryYield = state.activePlayers * 0.5;
-      const newTreasury = state.treasury + treasuryYield;
-
-      return {
-        ...state,
-        blockHeight: newBlock,
-        agents: updatedAgents,
-        treasury: newTreasury,
-      };
+      if (termData.term) {
+        candidates = termData.term.candidates.map((c) => ({
+          address: c.candidate.address,
+          bribePerVote: parseInt(c.bribePerVote) / 1e18,
+          campaignFunds: parseInt(c.campaignFunds) / 1e18,
+          voteCount: c.voteCount,
+        }));
+      }
+    } catch (error) {
+      console.warn("Failed to fetch election data:", error);
     }
 
-    case "EVENT": {
-      const newEvents = [action.event, ...state.events].slice(0, 100);
-      return {
-        ...state,
-        ...action.stateUpdates,
-        events: newEvents,
-      };
-    }
+    // Create headhunters leaderboard
+    const headhunters = leaderboardData.players.map((p) => ({
+      address: p.address,
+      kills: p.killCount,
+    }));
 
-    default:
-      return state;
+    return {
+      blockHeight,
+      agents,
+      deadAgents,
+      king,
+      candidates,
+      treasury,
+      taxRate,
+      activePlayers,
+      events,
+      headhunters,
+    };
+  } catch (error) {
+    console.error("Failed to fetch game state:", error);
+    throw error;
   }
 }
 
 // ── Hook ─────────────────────────────────────────────────
 
 export function useGameEngine() {
-  const [state, dispatch] = useReducer(gameReducer, null, createInitialState);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const [state, setState] = useState<GameState | null>(null);
+  const [latestEvent, setLatestEvent] = useState<GameEvent | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const previousEventsRef = useRef<Set<string>>(new Set());
 
-  const generateRandomEvent = useCallback(() => {
-    const s = stateRef.current;
-    const roll = Math.random();
-    const activeAgents = s.agents.filter((a) => a.isActive);
-    if (activeAgents.length === 0) return;
+  // Fetch game state on mount and poll every second
+  const fetchData = useCallback(async () => {
+    try {
+      const newState = await fetchGameState();
+      setState(newState);
+      setError(null);
 
-    // 60% nothing
-    if (roll < 0.6) return;
+      // Detect new events since last fetch
+      if (newState.events.length > 0) {
+        const latestEventData = newState.events[0];
+        if (!previousEventsRef.current.has(latestEventData.id)) {
+          setLatestEvent(latestEventData);
+          previousEventsRef.current.add(latestEventData.id);
 
-    // 15% VoteCast
-    if (roll < 0.75) {
-      const voter = pickRandom(activeAgents);
-      if (s.candidates.length === 0) return;
-      const candidate = pickRandom(s.candidates);
-      const updatedCandidates = s.candidates.map((c) =>
-        c.address === candidate.address
-          ? { ...c, voteCount: c.voteCount + 1 }
-          : c
-      );
-      dispatch({
-        type: "EVENT",
-        event: makeEvent("VoteCast", s.blockHeight, {
-          voter: voter.address,
-          candidate: candidate.address,
-          bribe: candidate.bribePerVote,
-        }),
-        stateUpdates: { candidates: updatedCandidates },
-      });
-      return;
+          // Keep only recent event IDs in memory (last 100)
+          if (previousEventsRef.current.size > 100) {
+            const idsArray = Array.from(previousEventsRef.current);
+            previousEventsRef.current = new Set(idsArray.slice(-100));
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error("Unknown error"));
     }
-
-    // 5% PlayerPurged
-    if (roll < 0.8) {
-      const insolvents = activeAgents.filter(
-        (a) => a.status === "insolvent" || a.status === "critical"
-      );
-      if (insolvents.length === 0) return;
-      const victim = pickRandom(insolvents);
-      const purger = pickRandom(
-        activeAgents.filter((a) => a.address !== victim.address)
-      );
-      if (!purger) return;
-
-      const deadAgent: DeadAgent = {
-        address: victim.address,
-        cause: "PURGED",
-        krillAtDeath: victim.effectiveBalance,
-        block: s.blockHeight,
-        killedBy: purger.address,
-      };
-
-      const updatedAgents = s.agents.map((a) =>
-        a.address === victim.address
-          ? { ...a, isActive: false, status: "dead" as AgentStatus }
-          : a
-      );
-      const updatedHunters = s.headhunters.map((h) =>
-        h.address === purger.address ? { ...h, kills: h.kills + 1 } : h
-      );
-      // Also update the purger's kill count in agents
-      const agentsWithKills = updatedAgents.map((a) =>
-        a.address === purger.address ? { ...a, kills: a.kills + 1 } : a
-      );
-
-      dispatch({
-        type: "EVENT",
-        event: makeEvent("PlayerPurged", s.blockHeight, {
-          player: victim.address,
-          purger: purger.address,
-          krillBalance: Math.round(victim.effectiveBalance),
-        }),
-        stateUpdates: {
-          agents: agentsWithKills,
-          deadAgents: [deadAgent, ...s.deadAgents],
-          headhunters: updatedHunters,
-          activePlayers: s.activePlayers - 1,
-        },
-      });
-      return;
-    }
-
-    // 5% TaxRateChanged
-    if (roll < 0.85) {
-      const oldRate = s.taxRate;
-      const change = randomInt(-50, 100);
-      const newRate = Math.max(50, Math.min(1000, oldRate + change));
-      dispatch({
-        type: "EVENT",
-        event: makeEvent("TaxRateChanged", s.blockHeight, {
-          oldRate,
-          newRate,
-        }),
-        stateUpdates: { taxRate: newRate },
-      });
-      return;
-    }
-
-    // 5% TreasuryDistribution
-    if (roll < 0.9) {
-      const recipient = pickRandom(activeAgents);
-      const amount = randomInt(100, 2000);
-      const updatedAgents = s.agents.map((a) =>
-        a.address === recipient.address
-          ? {
-              ...a,
-              krillBalance: a.krillBalance + amount,
-              effectiveBalance: a.effectiveBalance + amount,
-            }
-          : a
-      );
-      dispatch({
-        type: "EVENT",
-        event: makeEvent("TreasuryDistribution", s.blockHeight, {
-          to: recipient.address,
-          amount,
-        }),
-        stateUpdates: {
-          agents: updatedAgents,
-          treasury: Math.max(0, s.treasury - amount),
-        },
-      });
-      return;
-    }
-
-    // 3% DelinquentSettled
-    if (roll < 0.93) {
-      const delinquents = activeAgents.filter((a) => a.isDelinquent);
-      if (delinquents.length === 0) return;
-      const target = pickRandom(delinquents);
-      const settler = pickRandom(
-        activeAgents.filter((a) => a.address !== target.address)
-      );
-      if (!settler) return;
-      const bounty = Math.round(
-        target.effectiveBalance * (DELINQUENCY_BOUNTY_PCT / 100)
-      );
-
-      const deadAgent: DeadAgent = {
-        address: target.address,
-        cause: "DELINQUENT",
-        krillAtDeath: target.effectiveBalance,
-        block: s.blockHeight,
-        killedBy: settler.address,
-      };
-
-      const updatedAgents = s.agents.map((a) => {
-        if (a.address === target.address)
-          return { ...a, isActive: false, status: "dead" as AgentStatus };
-        if (a.address === settler.address)
-          return {
-            ...a,
-            krillBalance: a.krillBalance + bounty,
-            effectiveBalance: a.effectiveBalance + bounty,
-            kills: a.kills + 1,
-          };
-        return a;
-      });
-      const updatedHunters = s.headhunters.map((h) =>
-        h.address === settler.address ? { ...h, kills: h.kills + 1 } : h
-      );
-
-      dispatch({
-        type: "EVENT",
-        event: makeEvent("DelinquentSettled", s.blockHeight, {
-          player: target.address,
-          settler: settler.address,
-          bounty,
-        }),
-        stateUpdates: {
-          agents: updatedAgents,
-          deadAgents: [deadAgent, ...s.deadAgents],
-          headhunters: updatedHunters,
-          activePlayers: s.activePlayers - 1,
-        },
-      });
-      return;
-    }
-
-    // 3% PlayerEntered
-    if (roll < 0.96) {
-      const newAgent: Agent = {
-        address: randomAddress(),
-        krillBalance: STARTING_KRILL,
-        effectiveBalance: STARTING_KRILL,
-        lastTaxBlock: s.blockHeight,
-        joinedBlock: s.blockHeight,
-        isActive: true,
-        isInsolvent: false,
-        isDelinquent: false,
-        status: "safe",
-        kills: 0,
-        gridIndex: s.agents.length,
-      };
-      dispatch({
-        type: "EVENT",
-        event: makeEvent("PlayerEntered", s.blockHeight, {
-          player: newAgent.address,
-          shellAmount: 1000,
-          krillAmount: STARTING_KRILL,
-        }),
-        stateUpdates: {
-          agents: [...s.agents, newAgent],
-          headhunters: [
-            ...s.headhunters,
-            { address: newAgent.address, kills: 0 },
-          ],
-          activePlayers: s.activePlayers + 1,
-        },
-      });
-      return;
-    }
-
-    // 2% CampaignStarted
-    if (roll < 0.98) {
-      const newCandidate = pickRandom(activeAgents);
-      if (s.candidates.some((c) => c.address === newCandidate.address)) return;
-      const bribe = randomInt(5, 50);
-      dispatch({
-        type: "EVENT",
-        event: makeEvent("CampaignStarted", s.blockHeight, {
-          candidate: newCandidate.address,
-          bribePerVote: bribe,
-        }),
-        stateUpdates: {
-          candidates: [
-            ...s.candidates,
-            {
-              address: newCandidate.address,
-              bribePerVote: bribe,
-              campaignFunds: randomInt(500, 3000),
-              voteCount: 0,
-            },
-          ],
-        },
-      });
-      return;
-    }
-
-    // 2% BribePerVoteUpdated
-    if (s.candidates.length === 0) return;
-    const candidate = pickRandom(s.candidates);
-    const oldBribe = candidate.bribePerVote;
-    const newBribe = Math.max(1, oldBribe + randomInt(-10, 20));
-    const updatedCandidates = s.candidates.map((c) =>
-      c.address === candidate.address ? { ...c, bribePerVote: newBribe } : c
-    );
-    dispatch({
-      type: "EVENT",
-      event: makeEvent("BribePerVoteUpdated", s.blockHeight, {
-        candidate: candidate.address,
-        oldBribe,
-        newBribe,
-      }),
-      stateUpdates: { candidates: updatedCandidates },
-    });
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      dispatch({ type: "TICK" });
-      generateRandomEvent();
-    }, 1000);
+    // Initial fetch
+    fetchData();
+
+    // Poll every 1 second for updates
+    const interval = setInterval(fetchData, 1000);
+
     return () => clearInterval(interval);
-  }, [generateRandomEvent]);
+  }, [fetchData]);
 
-  const latestEvent = state.events[0] ?? null;
+  // Return loading state while fetching initial data
+  if (!state && !error) {
+    // Return a placeholder empty state
+    return {
+      state: {
+        blockHeight: 0,
+        agents: [],
+        deadAgents: [],
+        king: {
+          address: "",
+          term: 0,
+          taxRate: 0,
+          termStartBlock: 0,
+          termEndBlock: 0,
+          voterCount: 0,
+        },
+        candidates: [],
+        treasury: 0,
+        taxRate: 0,
+        activePlayers: 0,
+        events: [],
+        headhunters: [],
+      } as GameState,
+      latestEvent: null,
+      error: null,
+    };
+  }
 
-  return { state, latestEvent };
+  if (error && !state) {
+    console.error("Game engine error:", error);
+    // Return error state with empty data
+    return {
+      state: {
+        blockHeight: 0,
+        agents: [],
+        deadAgents: [],
+        king: {
+          address: "",
+          term: 0,
+          taxRate: 0,
+          termStartBlock: 0,
+          termEndBlock: 0,
+          voterCount: 0,
+        },
+        candidates: [],
+        treasury: 0,
+        taxRate: 0,
+        activePlayers: 0,
+        events: [],
+        headhunters: [],
+      } as GameState,
+      latestEvent: null,
+      error,
+    };
+  }
+
+  return { state: state!, latestEvent, error };
 }
+
+// No more mock event generation - all events come from the indexer

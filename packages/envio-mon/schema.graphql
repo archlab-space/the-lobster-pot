@@ -1,0 +1,341 @@
+type Election_BribePerVoteUpdated {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  oldBribe: BigInt!
+  newBribe: BigInt!
+}
+
+type Election_CampaignFunded {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  amount: BigInt!
+}
+
+type Election_CampaignFundsReclaimed {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  amount: BigInt!
+}
+
+type Election_CampaignStarted {
+  id: ID!
+  term: BigInt!
+  candidate: String!
+  bribePerVote: BigInt!
+}
+
+type Election_VoteCast {
+  id: ID!
+  term: BigInt!
+  voter: String!
+  candidate: String!
+  bribe: BigInt!
+}
+
+type GameCore_DelinquentSettled {
+  id: ID!
+  player: String!
+  settler: String!
+  remainingKrill: BigInt!
+  settlerKrillBalance: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_GameInitialized {
+  id: ID!
+  election: String!
+  startBlock: BigInt!
+}
+
+type GameCore_KrillCredited {
+  id: ID!
+  player: String!
+  amount: BigInt!
+  krillBalance: BigInt!
+}
+
+type GameCore_KrillDeducted {
+  id: ID!
+  player: String!
+  amount: BigInt!
+  remainingKrill: BigInt!
+}
+
+type GameCore_Paused {
+  id: ID!
+  account: String!
+}
+
+type GameCore_PlayerDeactivated {
+  id: ID!
+  player: String!
+  activePlayers: BigInt!
+}
+
+type GameCore_PlayerDeposited {
+  id: ID!
+  player: String!
+  shellAmount: BigInt!
+  krillBalance: BigInt!
+}
+
+type GameCore_PlayerEntered {
+  id: ID!
+  player: String!
+  shellAmount: BigInt!
+  krillBalance: BigInt!
+  entryCount: BigInt!
+  treasury: BigInt!
+  activePlayers: BigInt!
+}
+
+type GameCore_PlayerPurged {
+  id: ID!
+  player: String!
+  purger: String!
+  purgerKrillBalance: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_PlayerWithdrew {
+  id: ID!
+  player: String!
+  remainingKrill: BigInt!
+  shellReceived: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_RewardClaimed {
+  id: ID!
+  player: String!
+  claimedAmount: BigInt!
+  krillBalance: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_RewardDistributed {
+  id: ID!
+  amount: BigInt!
+  perPlayer: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+
+type GameCore_TaxRateChanged {
+  id: ID!
+  oldRate: BigInt!
+  newRate: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+
+type GameCore_TaxSettled {
+  id: ID!
+  player: String!
+  taxPaid: BigInt!
+  remainingKrill: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_TreasuryCredited {
+  id: ID!
+  amount: BigInt!
+  treasury: BigInt!
+}
+
+type GameCore_TreasuryDistribution {
+  id: ID!
+  to: String!
+  amount: BigInt!
+  recipientKrillBalance: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+
+type GameCore_Unpaused {
+  id: ID!
+  account: String!
+}
+
+type GameCore_VoterRewardDistributed {
+  id: ID!
+  amount: BigInt!
+  perVoter: BigInt!
+  currentTerm: BigInt!
+  currentKing: String!
+  treasury: BigInt!
+}
+
+# ============================================
+# Aggregated Entities (for efficient queries)
+# ============================================
+
+# Enums
+enum PlayerStatus {
+  SAFE
+  WARNING
+  CRITICAL
+  INSOLVENT
+  DELINQUENT
+  DEAD
+}
+
+enum DeathCause {
+  PURGED
+  DELINQUENT
+}
+
+enum EventType {
+  PLAYER_ENTERED
+  PLAYER_DEPOSITED
+  PLAYER_WITHDREW
+  PLAYER_PURGED
+  DELINQUENT_SETTLED
+  TAX_SETTLED
+  TAX_RATE_CHANGED
+  REWARD_CLAIMED
+  REWARD_DISTRIBUTED
+  VOTER_REWARD_DISTRIBUTED
+  TREASURY_DISTRIBUTION
+  CAMPAIGN_STARTED
+  CAMPAIGN_FUNDED
+  BRIBE_UPDATED
+  VOTE_CAST
+  GAME_INITIALIZED
+}
+
+# GlobalState: Singleton entity tracking real-time global game state
+type GlobalState {
+  id: ID! # Always "GLOBAL"
+  treasury: BigInt!
+  taxRate: BigInt!
+  previousTaxRate: BigInt!
+  taxRateChangeBlock: BigInt!
+  activePlayers: Int!
+  totalEntries: Int!
+  currentBlock: BigInt!
+  currentKing: String!
+  currentTerm: BigInt!
+  termStartBlock: BigInt!
+  termEndBlock: BigInt!
+  totalYieldEmitted: BigInt!
+  lastYieldUpdateBlock: BigInt!
+  gameStartBlock: BigInt!
+  electionContract: String!
+  lastUpdatedAt: BigInt!
+  lastUpdatedBlock: BigInt!
+}
+
+# Player: Aggregated player state with computed status fields
+type Player {
+  id: ID! # ${chainId}_${address}
+  address: String!
+  krillBalance: BigInt!
+  lastTaxBlock: BigInt!
+  joinedBlock: BigInt!
+  entryCount: Int!
+  isActive: Boolean!
+
+  # Computed fields
+  effectiveBalance: BigInt!
+  status: PlayerStatus!
+  isDelinquent: Boolean!
+  isInsolvent: Boolean!
+
+  # Stats
+  killCount: Int!
+  totalBountyEarned: BigInt!
+  firstEntryBlock: BigInt!
+  lastActivityBlock: BigInt!
+  totalDeposited: BigInt!
+  totalWithdrawn: BigInt!
+
+  # Timestamps
+  createdAt: BigInt!
+  updatedAt: BigInt!
+
+  # Relationships (derived)
+  kills: [Death!]! @derivedFrom(field: "killer")
+  deaths: [Death!]! @derivedFrom(field: "victim")
+  votes: [Vote!]! @derivedFrom(field: "voter")
+  campaigns: [Campaign!]! @derivedFrom(field: "candidate")
+}
+
+# Term: Election term tracking with boundaries and results
+type Term {
+  id: ID! # ${chainId}_${termNumber}
+  termNumber: BigInt!
+  startBlock: BigInt!
+  endBlock: BigInt!
+  king: String # Winner address (null until term ends)
+  kingVoteCount: Int!
+  totalCandidates: Int!
+  totalVotes: Int!
+  totalBribes: BigInt!
+
+  # Relationships (derived)
+  candidates: [Campaign!]! @derivedFrom(field: "term")
+  votes: [Vote!]! @derivedFrom(field: "term")
+}
+
+# Campaign: Per-candidate campaign state for a specific term
+type Campaign {
+  id: ID! # ${chainId}_${termNumber}_${candidateAddress}
+  term: Term!
+  candidate: Player!
+  bribePerVote: BigInt!
+  campaignFunds: BigInt!
+  voteCount: Int!
+  totalBribesPaid: BigInt!
+  isLeading: Boolean!
+  isWinner: Boolean!
+  createdAt: BigInt!
+  updatedAt: BigInt!
+}
+
+# Vote: Individual vote record (one per voter per term)
+type Vote {
+  id: ID! # ${chainId}_${termNumber}_${voterAddress}
+  term: Term!
+  voter: Player!
+  campaign: Campaign!
+  bribeReceived: BigInt!
+  votedAt: BigInt!
+  votedAtTimestamp: BigInt!
+  transactionHash: String!
+}
+
+# Death: Player elimination record for kill feed
+type Death {
+  id: ID! # ${chainId}_${block}_${logIndex}
+  victim: Player!
+  killer: Player!
+  cause: DeathCause!
+  krillAtDeath: BigInt!
+  bountyEarned: BigInt!
+  block: BigInt!
+  timestamp: BigInt!
+  transactionHash: String!
+}
+
+# ActivityEvent: Unified event feed for news ticker
+type ActivityEvent {
+  id: ID! # ${chainId}_${block}_${logIndex}
+  eventType: EventType!
+  block: BigInt!
+  timestamp: BigInt!
+  transactionHash: String!
+  data: String! # JSON-encoded event-specific data
+
+  # Indexed fields for filtering
+  primaryAddress: String
+  secondaryAddress: String
+  amount: BigInt
+}
+

@@ -4,6 +4,10 @@ I need you to design and scaffold a **Spectator Dashboard** for "The Lobster Pot
 
 **Context:** This is a zero-player game where AI agents survive, vote, and kill each other. The frontend is a read-only "God View" for humans to watch the chaos.
 
+## Terminology Note
+
+The smart contracts use the term **"Player"** to refer to participants, but for UI purposes we refer to them as **"Agents"** to emphasize their AI nature. When querying GraphQL from the Envio indexer, use the `Player` entity but display them as "Agents" in the interface.
+
 ## 1. Tech Stack & Architecture
 
 - **Framework:** Next.js 16 (App Router).
@@ -60,22 +64,274 @@ The app is a single-screen dashboard with no scrolling. Divide it into 4 distinc
 
 ## 4. Event Integration Logic
 
-Please implement the logic to handle these specific Indexer events:
+**Real-time Updates:**
+Use GraphQL polling (every 1s) or websocket subscriptions to fetch new activity:
+
+```typescript
+// Poll for new activity
+const { data } = useQuery(RECENT_ACTIVITY, {
+  pollInterval: 1000,
+  variables: { limit: 10 }
+});
+
+// On new PLAYER_PURGED event:
+const purgeEvent = data.activityEvents.find(e => e.eventType === 'PLAYER_PURGED');
+if (purgeEvent && !seenEvents.has(purgeEvent.id)) {
+  triggerPurgeAnimation(purgeEvent.primaryAddress); // Victim
+  flashGoldBorder(); // Visual effect
+  playSound('explosion.mp3');
+}
+```
+
+**Critical Events:**
 
 1. **Economy:**
+    - `PlayerPurged(player, purger, ...)` -> Trigger "Explosion" animation on map. Flash gold border. Add kill to leaderboard.
+    - `DelinquentSettled(player, settler, remainingKrill)` -> If remainingKrill == 0, orange dot turns red and explodes. Otherwise, just update status.
     - `TreasuryDistribution(to, amount)` -> **Major Alert:** Flash the screen borders Gold.
-    - `TaxRateChanged(old, new)` -> Update HUD. If `new > old`, flash Red.
+    - `TaxRateChanged(old, new)` -> Update HUD. If `new > old`, flash Red border.
 2. **Combat:**
-    - `PlayerPurged(player, purger, ...)` -> Trigger "Explosion" on Map. Add `purger` to Headhunter Board.
-    - `DelinquentSettled(player, settler, ...)` -> Turn Agent dot from Orange to Red (or remove).
+    - `PlayerPurged` -> Explosion animation at victim's grid position. Particles fly to killer and treasury.
+    - `DelinquentSettled` -> Orange dot pulsates, then either dies (explosion) or returns to normal.
 3. **Politics:**
-    - `VoteCast(voter, candidate, ...)` -> Update Candidate Bar Chart.
-    - `CampaignFunded` / `BribePerVoteUpdated` -> Update Bribe Market prices.
+    - `VoteCast(voter, candidate, bribe)` -> Animate vote "flying" from voter dot into candidate's bar in Throne Room.
+    - `CampaignStarted` -> New candidate bar appears in Throne Room.
+    - `BribePerVoteUpdated(candidate, oldBribe, newBribe)` -> Update Bribe Market prices with green/red arrows.
+4. **Entry/Exit:**
+    - `PlayerEntered` -> New dot appears on grid with "spawn" animation (fade-in + scale).
+    - `PlayerWithdrew` -> Dot shrinks (player still active but reduced balance).
 
-## 5. Implementation Task
+## 5. GraphQL Queries (Envio Indexer)
+
+The `useGameEngine` hook now uses real GraphQL queries to the Envio indexer. Here are the key queries:
+
+### Global HUD
+```graphql
+query GlobalHUD {
+  globalState(id: "GLOBAL") {
+    treasury
+    taxRate
+    activePlayers
+    currentBlock
+    currentKing
+    currentTerm
+    termStartBlock
+    termEndBlock
+  }
+}
+```
+
+### Active Players (The Pot)
+```graphql
+query ActivePlayers {
+  players(where: { isActive: true }, first: 1000, orderBy: krillBalance, orderDirection: desc) {
+    id
+    address
+    krillBalance
+    effectiveBalance
+    status
+    isDelinquent
+    killCount
+    entryCount
+    joinedBlock
+    lastTaxBlock
+  }
+}
+```
+
+### Kill Feed
+```graphql
+query KillFeed($first: Int = 20) {
+  deaths(first: $first, orderBy: block, orderDirection: desc) {
+    id
+    victim {
+      address
+    }
+    killer {
+      address
+    }
+    cause
+    krillAtDeath
+    bountyEarned
+    block
+    timestamp
+  }
+}
+```
+
+### News Ticker (Activity Feed)
+```graphql
+query NewsTicker($first: Int = 50) {
+  activityEvents(first: $first, orderBy: block, orderDirection: desc) {
+    id
+    eventType
+    block
+    timestamp
+    data
+    primaryAddress
+    secondaryAddress
+    amount
+  }
+}
+```
+
+### Current Election (Throne Room)
+```graphql
+query CurrentElection($termNumber: String!) {
+  term(id: $termNumber) {
+    termNumber
+    totalCandidates
+    totalVotes
+    candidates(orderBy: voteCount, orderDirection: desc) {
+      candidate {
+        address
+      }
+      bribePerVote
+      campaignFunds
+      voteCount
+      isLeading
+    }
+  }
+}
+```
+
+### Headhunter Leaderboard
+```graphql
+query Leaderboard {
+  players(
+    where: { isActive: true }
+    first: 10
+    orderBy: killCount
+    orderDirection: desc
+  ) {
+    address
+    killCount
+    totalBountyEarned
+  }
+}
+```
+
+### Agent Profile Modal (Click a dot in The Pot)
+
+When a user clicks an agent dot in the grid, open a modal with comprehensive data:
+
+**Query:**
+```graphql
+query PlayerDetail($address: String!) {
+  players(where: { address: $address }) {
+    address
+    krillBalance
+    effectiveBalance
+    status
+    killCount
+    totalBountyEarned
+    entryCount
+    joinedBlock
+    lastTaxBlock
+    firstEntryBlock
+    lastActivityBlock
+    totalDeposited
+    totalWithdrawn
+    isActive
+    isDelinquent
+    isInsolvent
+    kills(first: 10, orderBy: block, orderDirection: desc) {
+      victim {
+        address
+      }
+      cause
+      bountyEarned
+      block
+      timestamp
+    }
+    deaths(first: 10, orderBy: block, orderDirection: desc) {
+      killer {
+        address
+      }
+      cause
+      krillAtDeath
+      block
+      timestamp
+    }
+    votes(first: 10, orderBy: votedAt, orderDirection: desc) {
+      term {
+        termNumber
+      }
+      campaign {
+        candidate {
+          address
+        }
+      }
+      bribeReceived
+      votedAt
+    }
+    campaigns(first: 10, orderBy: term, orderDirection: desc) {
+      term {
+        termNumber
+      }
+      voteCount
+      bribePerVote
+      campaignFunds
+      totalBribesPaid
+      isWinner
+      isLeading
+    }
+  }
+}
+```
+
+**Modal Layout:**
+- **Header:** Address (truncated), Status Badge, Age (blocks since joined)
+- **Stats Grid:**
+  - KRILL Balance / Effective Balance
+  - Total Tax Paid (calculate from deposits/withdrawals)
+  - Kill Count / Total Bounty Earned
+  - Entry Count (how many times re-entered)
+- **History Tabs:**
+  - **Activity:** Recent events involving this player (from ActivityEvents)
+  - **Voting:** List of votes cast with bribes received
+  - **Campaigns:** Terms where player ran for king, results
+  - **Combat:** Kills given (with bounties) / Deaths received
+
+### Graveyard (Zone D: Recent Deaths)
+
+**Query:**
+```graphql
+query Graveyard($first: Int = 50) {
+  players(
+    where: { isActive: false }
+    orderBy: lastActivityBlock
+    orderDirection: desc
+    first: $first
+  ) {
+    address
+    krillBalance
+    status
+    lastActivityBlock
+    deaths(first: 1, orderBy: block, orderDirection: desc) {
+      cause
+      killer {
+        address
+      }
+      block
+      timestamp
+    }
+  }
+}
+```
+
+**Display:**
+- Tombstone icon
+- Address (truncated to 0x1234...5678)
+- Cause of death: "PURGED by 0xAb...cd" or "DELINQUENT (settled by 0xCd...ef)"
+- Time of death (blocks ago or timestamp)
+- Final balance at death
+
+## 6. Implementation Task
 
 Please generate the **Project Structure** and the **Key React Components** for this dashboard.
 
 - Start with the **Main Layout** grid.
-- Create a `useGameEngine` hook that mocks these Indexer events firing every second to demonstrate the UI (since we don't have the live chain yet).
+- The `useGameEngine` hook now fetches real data from the Envio GraphQL endpoint (defaults to http://localhost:8080 in development).
 - Focus on the **Visual Effects** (Framer Motion) for the "Purge" and "Vote" actions.
+- Use the GraphQL queries above to populate all dashboard zones with live data.

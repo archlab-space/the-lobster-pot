@@ -1,0 +1,272 @@
+# GraphQL Queries for The Lobster Pot Spectator Dashboard
+
+# 1. Global HUD - Real-time global game state
+query GlobalHUD {
+  globalState(id: "GLOBAL") {
+    treasury
+    taxRate
+    activePlayers
+    totalEntries
+    currentBlock
+    currentKing
+    currentTerm
+    termStartBlock
+    termEndBlock
+    totalYieldEmitted
+  }
+}
+
+# 2. Active Players - Grid of active agents in The Pot
+query ActivePlayers {
+  players(where: { isActive: true }, first: 1000, orderBy: krillBalance, orderDirection: desc) {
+    id
+    address
+    krillBalance
+    effectiveBalance
+    status
+    isDelinquent
+    killCount
+    entryCount
+    joinedBlock
+    lastTaxBlock
+  }
+}
+
+# 3. Leaderboard - Top players by various metrics
+query Leaderboard($orderBy: Player_orderBy!, $first: Int = 10) {
+  players(
+    where: { isActive: true }
+    first: $first
+    orderBy: $orderBy
+    orderDirection: desc
+  ) {
+    address
+    krillBalance
+    effectiveBalance
+    killCount
+    totalBountyEarned
+    status
+    entryCount
+  }
+}
+
+# 4. Kill Feed - Recent player deaths
+query KillFeed($first: Int = 20) {
+  deaths(first: $first, orderBy: block, orderDirection: desc) {
+    id
+    victim {
+      address
+    }
+    killer {
+      address
+    }
+    cause
+    krillAtDeath
+    bountyEarned
+    block
+    timestamp
+    transactionHash
+  }
+}
+
+# 5. News Ticker - Recent activity events
+query NewsTicker($first: Int = 50) {
+  activityEvents(first: $first, orderBy: block, orderDirection: desc) {
+    id
+    eventType
+    block
+    timestamp
+    transactionHash
+    data
+    primaryAddress
+    secondaryAddress
+    amount
+  }
+}
+
+# 6. Current Election - Ongoing term with candidates and votes
+query CurrentElection($termNumber: BigInt!) {
+  term(id: $termNumber) {
+    termNumber
+    startBlock
+    endBlock
+    king
+    kingVoteCount
+    totalCandidates
+    totalVotes
+    totalBribes
+    candidates(orderBy: voteCount, orderDirection: desc) {
+      candidate {
+        address
+      }
+      bribePerVote
+      campaignFunds
+      voteCount
+      totalBribesPaid
+      isLeading
+      isWinner
+    }
+  }
+}
+
+# 7. Player Detail - Comprehensive profile for modal
+query PlayerDetail($address: String!) {
+  players(where: { address: $address }) {
+    address
+    krillBalance
+    effectiveBalance
+    status
+    killCount
+    totalBountyEarned
+    entryCount
+    joinedBlock
+    firstEntryBlock
+    lastTaxBlock
+    lastActivityBlock
+    totalDeposited
+    totalWithdrawn
+    isActive
+    isDelinquent
+    isInsolvent
+    kills(first: 10, orderBy: block, orderDirection: desc) {
+      victim {
+        address
+      }
+      cause
+      bountyEarned
+      block
+      timestamp
+    }
+    deaths(first: 10, orderBy: block, orderDirection: desc) {
+      killer {
+        address
+      }
+      cause
+      krillAtDeath
+      block
+      timestamp
+    }
+    votes(first: 10, orderBy: votedAt, orderDirection: desc) {
+      term {
+        termNumber
+      }
+      campaign {
+        candidate {
+          address
+        }
+      }
+      bribeReceived
+      votedAt
+    }
+    campaigns(first: 10, orderBy: term, orderDirection: desc) {
+      term {
+        termNumber
+      }
+      voteCount
+      bribePerVote
+      campaignFunds
+      totalBribesPaid
+      isWinner
+      isLeading
+    }
+  }
+}
+
+# 8. Vote History - Voting patterns for analysis
+query VoteHistory($termNumber: BigInt!, $first: Int = 100) {
+  votes(
+    where: { term: $termNumber }
+    first: $first
+    orderBy: votedAt
+    orderDirection: desc
+  ) {
+    voter {
+      address
+    }
+    campaign {
+      candidate {
+        address
+      }
+    }
+    bribeReceived
+    votedAt
+    votedAtTimestamp
+  }
+}
+
+# 9. Graveyard - Recently deceased players
+query Graveyard($first: Int = 50) {
+  players(
+    where: { isActive: false }
+    orderBy: lastActivityBlock
+    orderDirection: desc
+    first: $first
+  ) {
+    address
+    krillBalance
+    status
+    lastActivityBlock
+    deaths(first: 1, orderBy: block, orderDirection: desc) {
+      cause
+      killer {
+        address
+      }
+      block
+      timestamp
+    }
+  }
+}
+
+# 10. Treasury History - Treasury balance over time
+query TreasuryHistory($first: Int = 100) {
+  activityEvents(
+    where: { eventType_in: [TREASURY_DISTRIBUTION, TAX_SETTLED, PLAYER_ENTERED, PLAYER_WITHDREW] }
+    first: $first
+    orderBy: block
+    orderDirection: desc
+  ) {
+    eventType
+    block
+    timestamp
+    amount
+    data
+  }
+}
+
+# 11. Player Search - Find players by address pattern
+query PlayerSearch($addressPattern: String!, $first: Int = 20) {
+  players(
+    where: { address_contains: $addressPattern }
+    first: $first
+    orderBy: krillBalance
+    orderDirection: desc
+  ) {
+    address
+    krillBalance
+    effectiveBalance
+    status
+    isActive
+    killCount
+  }
+}
+
+# 12. Campaign Performance - All campaigns for a specific term
+query CampaignPerformance($termNumber: BigInt!) {
+  campaigns(
+    where: { term: $termNumber }
+    orderBy: voteCount
+    orderDirection: desc
+  ) {
+    candidate {
+      address
+    }
+    bribePerVote
+    campaignFunds
+    voteCount
+    totalBribesPaid
+    isLeading
+    isWinner
+    createdAt
+    updatedAt
+  }
+}

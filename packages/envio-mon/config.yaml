@@ -37,5 +37,8 @@ networks:
     - event: CampaignFundsReclaimed(uint256 indexed term, address indexed candidate, uint256 amount)
     - event: CampaignStarted(uint256 indexed term, address indexed candidate, uint256 bribePerVote)
     - event: VoteCast(uint256 indexed term, address indexed voter, address indexed candidate, uint256 bribe)
+field_selection:
+  transaction_fields:
+    - "hash"
 unordered_multichain_mode: true
 preload_handlers: true
