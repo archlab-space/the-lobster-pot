@@ -19,10 +19,10 @@ export function AgentGrid() {
   useEffect(() => {
     if (!latestEvent) return;
     if (
-      latestEvent.type === "PlayerPurged" ||
-      latestEvent.type === "DelinquentSettled"
+      latestEvent.type === "PLAYER_PURGED" ||
+      latestEvent.type === "DELINQUENT_SETTLED"
     ) {
-      const purgedAddr = latestEvent.data.player as string;
+      const purgedAddr = latestEvent.data.victim as string;
       const agent = state.agents.find((a) => a.address === purgedAddr);
       if (agent) {
         const effectId = latestEvent.id;

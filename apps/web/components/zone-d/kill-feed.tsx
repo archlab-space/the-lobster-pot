@@ -8,7 +8,11 @@ import { truncateAddress } from "@/lib/format";
 import type { GameEvent } from "@/lib/types";
 
 function isKillEvent(event: GameEvent): boolean {
-  return event.type === "PlayerPurged" || event.type === "DelinquentSettled";
+  if (event.type === "PLAYER_PURGED") return true;
+  if (event.type === "DELINQUENT_SETTLED") {
+    return String(event.data.died) === "true";
+  }
+  return false;
 }
 
 export function KillFeed() {
@@ -24,9 +28,9 @@ export function KillFeed() {
         <div className="space-y-1">
           <AnimatePresence initial={false}>
             {kills.map((event, i) => {
-              const player = event.data.player as string;
-              const killer = (event.data.purger ?? event.data.settler) as string;
-              const isDelinquent = event.type === "DelinquentSettled";
+              const victim = event.data.victim as string;
+              const killer = (event.data.killer ?? event.data.settler) as string;
+              const isDelinquent = event.type === "DELINQUENT_SETTLED";
 
               return (
                 <motion.div
@@ -39,7 +43,7 @@ export function KillFeed() {
                 >
                   <Skull className="h-3 w-3 shrink-0 text-death" />
                   <span className="text-death">
-                    {truncateAddress(player)}
+                    {truncateAddress(victim)}
                   </span>
                   <span className="text-muted-foreground">
                     {isDelinquent ? "settled by" : "killed by"}

@@ -21,3 +21,17 @@ export function formatBlock(block: number): string {
 export function formatBps(bps: number): string {
   return `${(bps / 100).toFixed(1)}%`;
 }
+
+/** Format a tax rate (KRILL/block, already divided by 1e18) */
+export function formatTaxRate(rate: number): string {
+  return `${rate.toFixed(1)} KRILL/blk`;
+}
+
+/** Parse a wei string to a number safely (handles large BigInt values) */
+export function parseWei(weiStr: string): number {
+  try {
+    return Number(BigInt(weiStr) / BigInt(1e14)) / 1e4;
+  } catch {
+    return parseFloat(weiStr) / 1e18;
+  }
+}

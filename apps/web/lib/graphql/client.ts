@@ -2,11 +2,6 @@
  * GraphQL client for querying the Envio indexer
  */
 
-// Default to localhost during development
-// In production, this should be set via environment variable
-const GRAPHQL_ENDPOINT =
-  process.env.NEXT_PUBLIC_GRAPHQL_ENDPOINT || "http://localhost:8080";
-
 export interface GraphQLResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;
@@ -14,9 +9,9 @@ export interface GraphQLResponse<T> {
 
 export async function graphqlQuery<T>(
   query: string,
-  variables?: Record<string, any>
+  variables?: Record<string, unknown>
 ): Promise<T> {
-  const response = await fetch(GRAPHQL_ENDPOINT, {
+  const response = await fetch("/api/graphql", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -44,7 +39,7 @@ export async function graphqlQuery<T>(
 export const QUERIES = {
   GLOBAL_HUD: `
     query GlobalHUD {
-      globalState(id: "GLOBAL") {
+      GlobalState_by_pk(id: "GLOBAL") {
         treasury
         taxRate
         activePlayers
@@ -59,7 +54,7 @@ export const QUERIES = {
 
   ACTIVE_PLAYERS: `
     query ActivePlayers {
-      players(where: { isActive: true }, first: 1000, orderBy: krillBalance, orderDirection: desc) {
+      Player(where: {isActive: {_eq: true}}, limit: 1000, order_by: {krillBalance: desc}) {
         id
         address
         krillBalance
@@ -76,7 +71,7 @@ export const QUERIES = {
 
   KILL_FEED: `
     query KillFeed($first: Int = 20) {
-      deaths(first: $first, orderBy: block, orderDirection: desc) {
+      Death(limit: $first, order_by: {block: desc}) {
         id
         victim {
           address
@@ -95,7 +90,7 @@ export const QUERIES = {
 
   NEWS_TICKER: `
     query NewsTicker($first: Int = 50) {
-      activityEvents(first: $first, orderBy: block, orderDirection: desc) {
+      ActivityEvent(limit: $first, order_by: {block: desc}) {
         id
         eventType
         block
@@ -110,11 +105,11 @@ export const QUERIES = {
 
   CURRENT_ELECTION: `
     query CurrentElection($termNumber: String!) {
-      term(id: $termNumber) {
+      Term_by_pk(id: $termNumber) {
         termNumber
         totalCandidates
         totalVotes
-        candidates(orderBy: voteCount, orderDirection: desc) {
+        candidates(order_by: {voteCount: desc}) {
           candidate {
             address
           }
@@ -129,11 +124,10 @@ export const QUERIES = {
 
   LEADERBOARD: `
     query Leaderboard {
-      players(
-        where: { isActive: true }
-        first: 10
-        orderBy: killCount
-        orderDirection: desc
+      Player(
+        where: {isActive: {_eq: true}}
+        limit: 10
+        order_by: {killCount: desc}
       ) {
         address
         killCount

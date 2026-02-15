@@ -9,63 +9,88 @@ import {
   AlertTriangle,
   Vote,
   BadgeDollarSign,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Receipt,
+  Gift,
+  Coins,
+  Settings,
 } from "lucide-react";
 import { useGameState } from "@/hooks/use-game-state";
-import { truncateAddress } from "@/lib/format";
+import { truncateAddress, formatTaxRate, parseWei } from "@/lib/format";
 import type { GameEvent, GameEventType } from "@/lib/types";
 
 const eventIcons: Record<GameEventType, React.ElementType> = {
-  PlayerPurged: Skull,
-  PlayerEntered: UserPlus,
-  TaxRateChanged: TrendingUp,
-  TreasuryDistribution: Landmark,
-  VoteCast: Vote,
-  DelinquentSettled: AlertTriangle,
-  CampaignStarted: Crown,
-  BribePerVoteUpdated: BadgeDollarSign,
-  RewardDistributed: Landmark,
-  VoterRewardDistributed: Landmark,
+  PLAYER_PURGED: Skull,
+  PLAYER_ENTERED: UserPlus,
+  PLAYER_DEPOSITED: ArrowDownToLine,
+  PLAYER_WITHDREW: ArrowUpFromLine,
+  TAX_RATE_CHANGED: TrendingUp,
+  TAX_SETTLED: Receipt,
+  TREASURY_DISTRIBUTION: Landmark,
+  VOTE_CAST: Vote,
+  DELINQUENT_SETTLED: AlertTriangle,
+  CAMPAIGN_STARTED: Crown,
+  CAMPAIGN_FUNDED: Coins,
+  BRIBE_UPDATED: BadgeDollarSign,
+  REWARD_DISTRIBUTED: Landmark,
+  REWARD_CLAIMED: Gift,
+  VOTER_REWARD_DISTRIBUTED: Landmark,
+  GAME_INITIALIZED: Settings,
 };
 
 const eventColors: Record<GameEventType, string> = {
-  PlayerPurged: "text-death",
-  PlayerEntered: "text-krill",
-  TaxRateChanged: "text-danger",
-  TreasuryDistribution: "text-danger",
-  VoteCast: "text-royalty",
-  DelinquentSettled: "text-delinquent",
-  CampaignStarted: "text-royalty",
-  BribePerVoteUpdated: "text-krill",
-  RewardDistributed: "text-krill",
-  VoterRewardDistributed: "text-krill",
+  PLAYER_PURGED: "text-death",
+  PLAYER_ENTERED: "text-krill",
+  PLAYER_DEPOSITED: "text-krill",
+  PLAYER_WITHDREW: "text-danger",
+  TAX_RATE_CHANGED: "text-danger",
+  TAX_SETTLED: "text-muted-foreground",
+  TREASURY_DISTRIBUTION: "text-danger",
+  VOTE_CAST: "text-royalty",
+  DELINQUENT_SETTLED: "text-delinquent",
+  CAMPAIGN_STARTED: "text-royalty",
+  CAMPAIGN_FUNDED: "text-royalty",
+  BRIBE_UPDATED: "text-krill",
+  REWARD_DISTRIBUTED: "text-krill",
+  REWARD_CLAIMED: "text-krill",
+  VOTER_REWARD_DISTRIBUTED: "text-krill",
+  GAME_INITIALIZED: "text-muted-foreground",
 };
 
 function formatEvent(event: GameEvent): string {
   switch (event.type) {
-    case "PlayerPurged":
-      return `${truncateAddress(event.data.player as string)} liquidated by ${truncateAddress(event.data.purger as string)}`;
-    case "PlayerEntered":
+    case "PLAYER_PURGED":
+      return `${truncateAddress(event.data.victim as string)} liquidated by ${truncateAddress(event.data.killer as string)}`;
+    case "PLAYER_ENTERED":
       return `${truncateAddress(event.data.player as string)} entered the pot`;
-    case "TaxRateChanged":
-      return `Tax rate changed: ${((event.data.oldRate as number) / 100).toFixed(1)}% → ${((event.data.newRate as number) / 100).toFixed(1)}%`;
-    case "TreasuryDistribution":
-      return `Treasury distributed ${(event.data.amount as number).toLocaleString()} KRILL to ${truncateAddress(event.data.to as string)}`;
-    case "VoteCast":
+    case "PLAYER_DEPOSITED":
+      return `${truncateAddress(event.data.player as string)} deposited SHELL`;
+    case "PLAYER_WITHDREW":
+      return `${truncateAddress(event.data.player as string)} withdrew SHELL`;
+    case "TAX_RATE_CHANGED": {
+      const oldRate = formatTaxRate(parseWei(String(event.data.oldRate)));
+      const newRate = formatTaxRate(parseWei(String(event.data.newRate)));
+      return `Tax rate changed: ${oldRate} → ${newRate}`;
+    }
+    case "TREASURY_DISTRIBUTION":
+      return `Treasury distributed KRILL to ${truncateAddress(event.data.to as string)}`;
+    case "VOTE_CAST":
       return `${truncateAddress(event.data.voter as string)} voted for ${truncateAddress(event.data.candidate as string)}`;
-    case "DelinquentSettled":
-      return `${truncateAddress(event.data.player as string)} settled as delinquent — ${(event.data.bounty as number).toLocaleString()} bounty`;
-    case "CampaignStarted":
+    case "DELINQUENT_SETTLED":
+      return `${truncateAddress(event.data.victim as string)} settled as delinquent`;
+    case "CAMPAIGN_STARTED":
       return `${truncateAddress(event.data.candidate as string)} launched campaign`;
-    case "BribePerVoteUpdated":
-      return `${truncateAddress(event.data.candidate as string)} updated bribe: ${event.data.oldBribe} → ${event.data.newBribe}`;
+    case "BRIBE_UPDATED":
+      return `${truncateAddress(event.data.candidate as string)} updated bribe`;
     default:
       return event.type;
   }
 }
 
 function TickerItem({ event }: { event: GameEvent }) {
-  const Icon = eventIcons[event.type];
-  const color = eventColors[event.type];
+  const Icon = eventIcons[event.type] ?? Settings;
+  const color = eventColors[event.type] ?? "text-muted-foreground";
 
   return (
     <span className={`inline-flex items-center gap-1.5 px-4 ${color}`}>

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useGameState } from "@/hooks/use-game-state";
 import { AddressLabel } from "@/components/shared/address-label";
-import { formatBps } from "@/lib/format";
+import { formatTaxRate } from "@/lib/format";
 import { TERM_LENGTH } from "@/lib/constants";
 
 export function KingCard() {
@@ -48,7 +48,7 @@ export function KingCard() {
         <div className="flex justify-between text-xs">
           <span className="text-muted-foreground">Tax Rate</span>
           <span className="font-medium text-danger">
-            {formatBps(state.taxRate)}
+            {formatTaxRate(state.taxRate)}
           </span>
         </div>
 

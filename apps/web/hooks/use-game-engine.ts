@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import type {
   GameState,
   Agent,
@@ -11,11 +11,12 @@ import type {
   DeadAgent,
 } from "@/lib/types";
 import { graphqlQuery, QUERIES } from "@/lib/graphql/client";
+import { parseWei } from "@/lib/format";
 
 // ── Types for GraphQL responses ──────────────────────────
 
 interface GlobalStateResponse {
-  globalState: {
+  GlobalState_by_pk: {
     treasury: string;
     taxRate: string;
     activePlayers: number;
@@ -28,7 +29,7 @@ interface GlobalStateResponse {
 }
 
 interface PlayersResponse {
-  players: Array<{
+  Player: Array<{
     id: string;
     address: string;
     krillBalance: string;
@@ -43,28 +44,33 @@ interface PlayersResponse {
 }
 
 interface DeathsResponse {
-  deaths: Array<{
+  Death: Array<{
     id: string;
     victim: { address: string };
     killer: { address: string };
     cause: string;
     krillAtDeath: string;
+    bountyEarned: string;
     block: string;
+    timestamp: string;
   }>;
 }
 
 interface ActivityEventsResponse {
-  activityEvents: Array<{
+  ActivityEvent: Array<{
     id: string;
     eventType: string;
     block: string;
     timestamp: string;
     data: string;
+    primaryAddress: string;
+    secondaryAddress: string;
+    amount: string;
   }>;
 }
 
 interface TermResponse {
-  term: {
+  Term_by_pk: {
     termNumber: string;
     totalCandidates: number;
     totalVotes: number;
@@ -79,7 +85,7 @@ interface TermResponse {
 }
 
 interface LeaderboardResponse {
-  players: Array<{
+  Player: Array<{
     address: string;
     killCount: number;
   }>;
@@ -122,21 +128,21 @@ async function fetchGameState(): Promise<GameState> {
       ]);
 
     // Parse global state
-    const global = globalData.globalState;
+    const global = globalData.GlobalState_by_pk;
     if (!global) {
       throw new Error("GlobalState not initialized");
     }
 
     const blockHeight = parseInt(global.currentBlock);
-    const treasury = parseInt(global.treasury) / 1e18; // Convert from Wei
-    const taxRate = parseInt(global.taxRate) / 1e18; // Convert from Wei
+    const treasury = parseWei(global.treasury);
+    const taxRate = parseWei(global.taxRate);
     const activePlayers = global.activePlayers;
 
     // Map players to agents
-    const agents: Agent[] = playersData.players.map((player, index) => ({
+    const agents: Agent[] = playersData.Player.map((player, index) => ({
       address: player.address,
-      krillBalance: parseInt(player.krillBalance) / 1e18,
-      effectiveBalance: parseInt(player.effectiveBalance) / 1e18,
+      krillBalance: parseWei(player.krillBalance),
+      effectiveBalance: parseWei(player.effectiveBalance),
       lastTaxBlock: parseInt(player.lastTaxBlock),
       joinedBlock: parseInt(player.joinedBlock),
       isActive: true,
@@ -148,18 +154,18 @@ async function fetchGameState(): Promise<GameState> {
     }));
 
     // Map deaths to dead agents
-    const deadAgents: DeadAgent[] = deathsData.deaths.map((death) => ({
+    const deadAgents: DeadAgent[] = deathsData.Death.map((death) => ({
       address: death.victim.address,
       cause: death.cause as "PURGED" | "DELINQUENT",
-      krillAtDeath: parseInt(death.krillAtDeath) / 1e18,
+      krillAtDeath: parseWei(death.krillAtDeath),
       block: parseInt(death.block),
       killedBy: death.killer.address,
     }));
 
     // Map activity events to game events
-    const events: GameEvent[] = eventsData.activityEvents.map((event) => ({
+    const events: GameEvent[] = eventsData.ActivityEvent.map((event) => ({
       id: event.id,
-      type: event.eventType.replace(/_/g, "") as GameEvent["type"],
+      type: event.eventType as GameEvent["type"],
       block: parseInt(event.block),
       timestamp: parseInt(event.timestamp) * 1000, // Convert to ms
       data: parseEventData(event.data),
@@ -185,11 +191,12 @@ async function fetchGameState(): Promise<GameState> {
         { termNumber: termId }
       );
 
-      if (termData.term) {
-        candidates = termData.term.candidates.map((c) => ({
+      if (termData.Term_by_pk) {
+        king.voterCount = termData.Term_by_pk.totalVotes;
+        candidates = termData.Term_by_pk.candidates.map((c) => ({
           address: c.candidate.address,
-          bribePerVote: parseInt(c.bribePerVote) / 1e18,
-          campaignFunds: parseInt(c.campaignFunds) / 1e18,
+          bribePerVote: parseWei(c.bribePerVote),
+          campaignFunds: parseWei(c.campaignFunds),
           voteCount: c.voteCount,
         }));
       }
@@ -198,7 +205,7 @@ async function fetchGameState(): Promise<GameState> {
     }
 
     // Create headhunters leaderboard
-    const headhunters = leaderboardData.players.map((p) => ({
+    const headhunters = leaderboardData.Player.map((p) => ({
       address: p.address,
       kills: p.killCount,
     }));
@@ -229,41 +236,36 @@ export function useGameEngine() {
   const [error, setError] = useState<Error | null>(null);
   const previousEventsRef = useRef<Set<string>>(new Set());
 
-  // Fetch game state on mount and poll every second
-  const fetchData = useCallback(async () => {
-    try {
-      const newState = await fetchGameState();
-      setState(newState);
-      setError(null);
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        const newState = await fetchGameState();
+        setState(newState);
+        setError(null);
 
-      // Detect new events since last fetch
-      if (newState.events.length > 0) {
-        const latestEventData = newState.events[0];
-        if (!previousEventsRef.current.has(latestEventData.id)) {
-          setLatestEvent(latestEventData);
-          previousEventsRef.current.add(latestEventData.id);
+        // Detect new events since last fetch
+        if (newState.events.length > 0) {
+          const latestEventData = newState.events[0];
+          if (!previousEventsRef.current.has(latestEventData.id)) {
+            setLatestEvent(latestEventData);
+            previousEventsRef.current.add(latestEventData.id);
 
-          // Keep only recent event IDs in memory (last 100)
-          if (previousEventsRef.current.size > 100) {
-            const idsArray = Array.from(previousEventsRef.current);
-            previousEventsRef.current = new Set(idsArray.slice(-100));
+            // Keep only recent event IDs in memory (last 100)
+            if (previousEventsRef.current.size > 100) {
+              const idsArray = Array.from(previousEventsRef.current);
+              previousEventsRef.current = new Set(idsArray.slice(-100));
+            }
           }
         }
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error("Unknown error"));
       }
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error("Unknown error"));
     }
-  }, []);
 
-  useEffect(() => {
-    // Initial fetch
     fetchData();
-
-    // Poll every 1 second for updates
-    const interval = setInterval(fetchData, 1000);
-
+    const interval = setInterval(fetchData, 4000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, []);
 
   // Return loading state while fetching initial data
   if (!state && !error) {

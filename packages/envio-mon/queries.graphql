@@ -1,8 +1,9 @@
 # GraphQL Queries for The Lobster Pot Spectator Dashboard
+# Hasura-style syntax (Envio v2 indexer)
 
 # 1. Global HUD - Real-time global game state
 query GlobalHUD {
-  globalState(id: "GLOBAL") {
+  GlobalState_by_pk(id: "GLOBAL") {
     treasury
     taxRate
     activePlayers
@@ -18,7 +19,7 @@ query GlobalHUD {
 
 # 2. Active Players - Grid of active agents in The Pot
 query ActivePlayers {
-  players(where: { isActive: true }, first: 1000, orderBy: krillBalance, orderDirection: desc) {
+  Player(where: {isActive: {_eq: true}}, limit: 1000, order_by: {krillBalance: desc}) {
     id
     address
     krillBalance
@@ -33,12 +34,11 @@ query ActivePlayers {
 }
 
 # 3. Leaderboard - Top players by various metrics
-query Leaderboard($orderBy: Player_orderBy!, $first: Int = 10) {
-  players(
-    where: { isActive: true }
-    first: $first
-    orderBy: $orderBy
-    orderDirection: desc
+query Leaderboard($orderBy: [Player_order_by!], $first: Int = 10) {
+  Player(
+    where: {isActive: {_eq: true}}
+    limit: $first
+    order_by: $orderBy
   ) {
     address
     krillBalance
@@ -52,7 +52,7 @@ query Leaderboard($orderBy: Player_orderBy!, $first: Int = 10) {
 
 # 4. Kill Feed - Recent player deaths
 query KillFeed($first: Int = 20) {
-  deaths(first: $first, orderBy: block, orderDirection: desc) {
+  Death(limit: $first, order_by: {block: desc}) {
     id
     victim {
       address
@@ -71,7 +71,7 @@ query KillFeed($first: Int = 20) {
 
 # 5. News Ticker - Recent activity events
 query NewsTicker($first: Int = 50) {
-  activityEvents(first: $first, orderBy: block, orderDirection: desc) {
+  ActivityEvent(limit: $first, order_by: {block: desc}) {
     id
     eventType
     block
@@ -85,8 +85,8 @@ query NewsTicker($first: Int = 50) {
 }
 
 # 6. Current Election - Ongoing term with candidates and votes
-query CurrentElection($termNumber: BigInt!) {
-  term(id: $termNumber) {
+query CurrentElection($termNumber: String!) {
+  Term_by_pk(id: $termNumber) {
     termNumber
     startBlock
     endBlock
@@ -95,7 +95,7 @@ query CurrentElection($termNumber: BigInt!) {
     totalCandidates
     totalVotes
     totalBribes
-    candidates(orderBy: voteCount, orderDirection: desc) {
+    candidates(order_by: {voteCount: desc}) {
       candidate {
         address
       }
@@ -111,7 +111,7 @@ query CurrentElection($termNumber: BigInt!) {
 
 # 7. Player Detail - Comprehensive profile for modal
 query PlayerDetail($address: String!) {
-  players(where: { address: $address }) {
+  Player(where: {address: {_eq: $address}}) {
     address
     krillBalance
     effectiveBalance
@@ -128,7 +128,7 @@ query PlayerDetail($address: String!) {
     isActive
     isDelinquent
     isInsolvent
-    kills(first: 10, orderBy: block, orderDirection: desc) {
+    kills(limit: 10, order_by: {block: desc}) {
       victim {
         address
       }
@@ -137,7 +137,7 @@ query PlayerDetail($address: String!) {
       block
       timestamp
     }
-    deaths(first: 10, orderBy: block, orderDirection: desc) {
+    deaths(limit: 10, order_by: {block: desc}) {
       killer {
         address
       }
@@ -146,7 +146,7 @@ query PlayerDetail($address: String!) {
       block
       timestamp
     }
-    votes(first: 10, orderBy: votedAt, orderDirection: desc) {
+    votes(limit: 10, order_by: {votedAt: desc}) {
       term {
         termNumber
       }
@@ -158,7 +158,7 @@ query PlayerDetail($address: String!) {
       bribeReceived
       votedAt
     }
-    campaigns(first: 10, orderBy: term, orderDirection: desc) {
+    campaigns(limit: 10, order_by: {term: {termNumber: desc}}) {
       term {
         termNumber
       }
@@ -173,12 +173,11 @@ query PlayerDetail($address: String!) {
 }
 
 # 8. Vote History - Voting patterns for analysis
-query VoteHistory($termNumber: BigInt!, $first: Int = 100) {
-  votes(
-    where: { term: $termNumber }
-    first: $first
-    orderBy: votedAt
-    orderDirection: desc
+query VoteHistory($termNumber: String!, $first: Int = 100) {
+  Vote(
+    where: {term: {id: {_eq: $termNumber}}}
+    limit: $first
+    order_by: {votedAt: desc}
   ) {
     voter {
       address
@@ -196,17 +195,16 @@ query VoteHistory($termNumber: BigInt!, $first: Int = 100) {
 
 # 9. Graveyard - Recently deceased players
 query Graveyard($first: Int = 50) {
-  players(
-    where: { isActive: false }
-    orderBy: lastActivityBlock
-    orderDirection: desc
-    first: $first
+  Player(
+    where: {isActive: {_eq: false}}
+    order_by: {lastActivityBlock: desc}
+    limit: $first
   ) {
     address
     krillBalance
     status
     lastActivityBlock
-    deaths(first: 1, orderBy: block, orderDirection: desc) {
+    deaths(limit: 1, order_by: {block: desc}) {
       cause
       killer {
         address
@@ -219,11 +217,10 @@ query Graveyard($first: Int = 50) {
 
 # 10. Treasury History - Treasury balance over time
 query TreasuryHistory($first: Int = 100) {
-  activityEvents(
-    where: { eventType_in: [TREASURY_DISTRIBUTION, TAX_SETTLED, PLAYER_ENTERED, PLAYER_WITHDREW] }
-    first: $first
-    orderBy: block
-    orderDirection: desc
+  ActivityEvent(
+    where: {eventType: {_in: [TREASURY_DISTRIBUTION, TAX_SETTLED, PLAYER_ENTERED, PLAYER_WITHDREW]}}
+    limit: $first
+    order_by: {block: desc}
   ) {
     eventType
     block
@@ -235,11 +232,10 @@ query TreasuryHistory($first: Int = 100) {
 
 # 11. Player Search - Find players by address pattern
 query PlayerSearch($addressPattern: String!, $first: Int = 20) {
-  players(
-    where: { address_contains: $addressPattern }
-    first: $first
-    orderBy: krillBalance
-    orderDirection: desc
+  Player(
+    where: {address: {_like: $addressPattern}}
+    limit: $first
+    order_by: {krillBalance: desc}
   ) {
     address
     krillBalance
@@ -251,11 +247,10 @@ query PlayerSearch($addressPattern: String!, $first: Int = 20) {
 }
 
 # 12. Campaign Performance - All campaigns for a specific term
-query CampaignPerformance($termNumber: BigInt!) {
-  campaigns(
-    where: { term: $termNumber }
-    orderBy: voteCount
-    orderDirection: desc
+query CampaignPerformance($termNumber: String!) {
+  Campaign(
+    where: {term: {id: {_eq: $termNumber}}}
+    order_by: {voteCount: desc}
   ) {
     candidate {
       address

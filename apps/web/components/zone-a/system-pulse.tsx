@@ -3,7 +3,7 @@
 import { Box, Users, Landmark, TrendingUp } from "lucide-react";
 import { useGameState } from "@/hooks/use-game-state";
 import { AnimatedNumber } from "@/components/shared/animated-number";
-import { formatKrill, formatBlock, formatBps } from "@/lib/format";
+import { formatKrill, formatBlock, formatTaxRate } from "@/lib/format";
 import {
   Tooltip,
   TooltipContent,
@@ -57,7 +57,7 @@ export function SystemPulse() {
         />
       </PulseItem>
       <PulseItem icon={TrendingUp} label="TAX" tooltip="Current tax rate">
-        <span className="text-danger">{formatBps(state.taxRate)}</span>
+        <span className="text-danger">{formatTaxRate(state.taxRate)}</span>
       </PulseItem>
       <PulseItem icon={Users} label="ALIVE" tooltip="Active players">
         <span>{state.activePlayers}</span>

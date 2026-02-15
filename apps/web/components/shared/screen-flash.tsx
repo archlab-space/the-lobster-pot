@@ -5,10 +5,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useGameState } from "@/hooks/use-game-state";
 
 const flashColors: Record<string, string> = {
-  TreasuryDistribution: "rgba(245, 158, 11, 0.15)",
-  TaxRateChanged: "rgba(225, 29, 72, 0.15)",
-  PlayerPurged: "rgba(225, 29, 72, 0.1)",
-  DelinquentSettled: "rgba(249, 115, 22, 0.1)",
+  TREASURY_DISTRIBUTION: "rgba(245, 158, 11, 0.15)",
+  TAX_RATE_CHANGED: "rgba(225, 29, 72, 0.15)",
+  PLAYER_PURGED: "rgba(225, 29, 72, 0.1)",
+  DELINQUENT_SETTLED: "rgba(249, 115, 22, 0.1)",
 };
 
 export function ScreenFlash() {

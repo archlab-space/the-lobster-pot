@@ -32,16 +32,22 @@ export interface Candidate {
 }
 
 export type GameEventType =
-  | "PlayerEntered"
-  | "PlayerPurged"
-  | "TaxRateChanged"
-  | "TreasuryDistribution"
-  | "VoteCast"
-  | "DelinquentSettled"
-  | "CampaignStarted"
-  | "BribePerVoteUpdated"
-  | "RewardDistributed"
-  | "VoterRewardDistributed";
+  | "PLAYER_ENTERED"
+  | "PLAYER_DEPOSITED"
+  | "PLAYER_WITHDREW"
+  | "PLAYER_PURGED"
+  | "DELINQUENT_SETTLED"
+  | "TAX_SETTLED"
+  | "TAX_RATE_CHANGED"
+  | "REWARD_CLAIMED"
+  | "REWARD_DISTRIBUTED"
+  | "VOTER_REWARD_DISTRIBUTED"
+  | "TREASURY_DISTRIBUTION"
+  | "CAMPAIGN_STARTED"
+  | "CAMPAIGN_FUNDED"
+  | "BRIBE_UPDATED"
+  | "VOTE_CAST"
+  | "GAME_INITIALIZED";
 
 export interface GameEvent {
   id: string;
