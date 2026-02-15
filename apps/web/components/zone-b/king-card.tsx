@@ -5,13 +5,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useGameState } from "@/hooks/use-game-state";
+import { useBlockNumber } from "@/hooks/use-block-number";
 import { AddressLabel } from "@/components/shared/address-label";
 import { formatTaxRate } from "@/lib/format";
 import { TERM_LENGTH } from "@/lib/constants";
 
 export function KingCard() {
   const { state } = useGameState();
-  const { king, blockHeight } = state;
+  const liveBlock = useBlockNumber();
+  const { king } = state;
+  const blockHeight = liveBlock || state.blockHeight;
 
   const blocksElapsed = blockHeight - king.termStartBlock;
   const termProgress = Math.min(100, (blocksElapsed / TERM_LENGTH) * 100);

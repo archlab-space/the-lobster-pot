@@ -16,5 +16,8 @@ export const DELINQUENCY_BOUNTY_PCT = 10;
 /** Term length in blocks */
 export const TERM_LENGTH = 72_000;
 
+/** KRILL yield added to treasury per block */
+export const YIELD_PER_BLOCK = 200;
+
 /** Max treasury size: 750M SHELL * 100 KRILL */
 export const MAX_TREASURY = 750_000_000 * KRILL_PER_SHELL;

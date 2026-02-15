@@ -2,8 +2,10 @@
 
 import { Box, Users, Landmark, TrendingUp } from "lucide-react";
 import { useGameState } from "@/hooks/use-game-state";
+import { useBlockNumber } from "@/hooks/use-block-number";
 import { AnimatedNumber } from "@/components/shared/animated-number";
 import { formatKrill, formatBlock, formatTaxRate } from "@/lib/format";
+import { YIELD_PER_BLOCK } from "@/lib/constants";
 import {
   Tooltip,
   TooltipContent,
@@ -43,15 +45,21 @@ function PulseItem({
 
 export function SystemPulse() {
   const { state } = useGameState();
+  const liveBlock = useBlockNumber();
+  const blockHeight = liveBlock || state.blockHeight;
+
+  // Interpolate treasury: indexer baseline + yield accrued since last indexed block
+  const blocksSinceIndexer = blockHeight > state.blockHeight ? blockHeight - state.blockHeight : 0;
+  const liveTreasury = state.treasury + blocksSinceIndexer * YIELD_PER_BLOCK;
 
   return (
     <div className="flex shrink-0 items-center gap-4">
       <PulseItem icon={Box} label="BLOCK" tooltip="Current block height">
-        <AnimatedNumber value={state.blockHeight} format={formatBlock} />
+        <AnimatedNumber value={blockHeight} format={formatBlock} />
       </PulseItem>
       <PulseItem icon={Landmark} label="TREASURY" tooltip="Total KRILL in treasury">
         <AnimatedNumber
-          value={state.treasury}
+          value={liveTreasury}
           format={(n) => formatKrill(n)}
           className="text-krill"
         />
