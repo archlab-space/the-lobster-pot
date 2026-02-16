@@ -1,0 +1,20 @@
+import type { Address } from "viem";
+import type { TxResult, CandidateData, ElectionSnapshot } from "./types.js";
+export declare function startCampaign(bribePerVote: bigint): Promise<TxResult>;
+export declare function fundCampaign(amount: bigint): Promise<TxResult>;
+export declare function updateBribePerVote(newBribePerVote: bigint): Promise<TxResult>;
+export declare function vote(candidate: Address): Promise<TxResult>;
+export declare function reclaimCampaignFunds(term: bigint): Promise<TxResult>;
+export declare function getCurrentTerm(): Promise<bigint>;
+export declare function getCurrentKing(): Promise<Address>;
+export declare function getCurrentKingVoterCount(): Promise<bigint>;
+export declare function getBlocksRemainingInTerm(): Promise<bigint>;
+export declare function getCandidateCount(term: bigint): Promise<bigint>;
+export declare function getCandidateList(term: bigint): Promise<Address[]>;
+export declare function getCandidate(term: bigint, candidate: Address): Promise<CandidateData>;
+export declare function checkHasVoted(term: bigint, voter: Address): Promise<boolean>;
+export declare function getVotedFor(term: bigint, voter: Address): Promise<Address>;
+export declare function getLeadingCandidate(term: bigint): Promise<Address>;
+export declare function getLeadingVoteCount(term: bigint): Promise<bigint>;
+export declare function getElectionSnapshot(): Promise<ElectionSnapshot>;
+//# sourceMappingURL=election.d.ts.map
