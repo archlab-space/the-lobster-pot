@@ -5,6 +5,7 @@ import * as shell from "./shell-token.js";
 import { parseShell, parseKrill, formatKrill, formatShell } from "./helpers.js";
 import { decodeContractError } from "./errors.js";
 import { getAgentAddress } from "./client.js";
+import 'dotenv/config';
 
 const [, , command, ...rest] = process.argv;
 
@@ -89,6 +90,7 @@ async function main() {
     case "enter": {
       const shellAmt = rest[0];
       if (!shellAmt) { console.error("Usage: enter <shell-amount>"); process.exit(1); }
+      console.log("Entering game with", shellAmt, "SHELL...");
       const result = await gameCore.enter(parseShell(shellAmt));
       json(result);
       break;

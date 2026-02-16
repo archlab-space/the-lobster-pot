@@ -28,7 +28,7 @@ The Lobster Pot is a multiplayer on-chain economic game on Monad Testnet. Player
 
 ## Chain & Contracts
 
-- **Chain**: Monad Testnet (chainId 41454)
+- **Chain**: Monad Testnet (chainId 10143)
 - **RPC**: https://testnet-rpc.monad.xyz
 - **SHELL Token**: `0xf19064B0673ffF053BCbB0aaB3f9E8Bd4c923ace`
 - **GameCore**: `0x78ab3a36B4DD7bB2AD45808F9C5dAe9a1c075C19`

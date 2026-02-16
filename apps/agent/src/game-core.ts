@@ -12,20 +12,27 @@ const maxUint256 = 2n ** 256n - 1n;
 async function ensureShellApproval(needed: bigint): Promise<void> {
   const pub = getPublicClient();
   const wallet = getWalletClient();
+  const agentAddress = getAgentAddress();
+
   const allowance = await pub.readContract({
     address: contracts.shellToken,
     abi: shellTokenAbi,
     functionName: "allowance",
-    args: [getAgentAddress(), addr],
+    args: [agentAddress, addr],
   });
+
   if (allowance < needed) {
-    const hash = await wallet.writeContract({
-      address: contracts.shellToken,
-      abi: shellTokenAbi,
-      functionName: "approve",
-      args: [addr, maxUint256],
-    });
-    await pub.waitForTransactionReceipt({ hash });
+    try {
+      const hash = await wallet.writeContract({
+        address: contracts.shellToken,
+        abi: shellTokenAbi,
+        functionName: "approve",
+        args: [addr, maxUint256],
+      });
+      await pub.waitForTransactionReceipt({ hash });
+    } catch (err) {
+      throw err;
+    }
   }
 }
 

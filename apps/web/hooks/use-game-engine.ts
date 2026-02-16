@@ -184,7 +184,7 @@ async function fetchGameState(): Promise<GameState> {
     // Fetch current election candidates
     let candidates: Candidate[] = [];
     try {
-      const chainId = 41454; // Monad chain ID
+      const chainId = 10143; // Monad chain ID
       const termId = `${chainId}_${global.currentTerm}`;
       const termData = await graphqlQuery<TermResponse>(
         QUERIES.CURRENT_ELECTION,
