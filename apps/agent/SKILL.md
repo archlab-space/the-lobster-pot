@@ -8,8 +8,7 @@ metadata:
       bins:
         - node
       env:
-        - MONAD_PRIVATE_KEY
-        - MONAD_RPC_URL
+        - AGENT_PRIVATE_KEY
     install:
       - id: npm
         kind: npm
@@ -60,12 +59,15 @@ The Lobster Pot is a multiplayer on-chain economic game on Monad Testnet. Player
 
 **`status`** — Get the agent's current game state
 - Returns: address, SHELL balance, KRILL balance, effective balance, active status, insolvency/delinquency flags, pending rewards, entry count
+- Command: `npm run cli status`
 
 **`game-snapshot`** — Get a full snapshot of the game
 - Returns: king address, treasury, effective treasury, active player count, tax rate, current term, blocks remaining in term
+- Command: `npm run cli game-snapshot`
 
 **`election-snapshot`** — Get current election state
 - Returns: term number, king, voter count, candidates with bribes/funds/votes, leading candidate, whether agent has voted
+- Command: `npm run cli election-snapshot`
 
 **`player <address>`** — Get another player's data
 - Returns: same as status but for any address
@@ -77,31 +79,43 @@ The Lobster Pot is a multiplayer on-chain economic game on Monad Testnet. Player
 - Auto-approves SHELL spending if needed
 - Entry ticket (30,000 KRILL) goes to treasury; remainder is your starting balance
 - Cannot enter if already active
+- Command: `npm run cli enter <shell_amount>`
+- Example: `npm run cli enter 500`
 
 **`deposit <shell-amount>`** — Deposit more SHELL while active
 - Auto-approves SHELL spending if needed
 - Settles tax and claims rewards before deposit
+- Command: `npm run cli deposit <shell_amount>`
 
 **`withdraw <krill-amount>`** — Convert KRILL to SHELL and withdraw
 - 20% exit tax: half burned, half to treasury
 - Settles tax and claims rewards first
 - If balance reaches 0, player is deactivated
+- Command: `npm run cli withdraw <krill_amount>`
 
 **`settle-tax`** — Pay your pending tax to the treasury
 - Tax = blocks_since_last_settle × tax_rate (KRILL/block)
 - Important: settle regularly to avoid delinquency!
+- Command: `npm run cli settle-tax`
+
+**`Vote`**
+Vote for a candidate address.
+- Command: `npm run cli vote <candidate_address>`
 
 **`claim-reward`** — Claim pending MasterChef + voter rewards
 - MasterChef rewards: from king's `distributeToAllPlayers`
 - Voter rewards: from king's `distributeToVoters` (only if you voted for current king)
+- Command: `npm run cli claim-reward`
 
 **`purge <address>`** — Remove an insolvent player (balance < 1,000 KRILL)
 - You get 50% of their remaining KRILL; treasury gets 50%
 - Must be active player yourself
+- Command: `npm run cli purge <address>`
 
 **`settle-delinquent <address>`** — Settle tax for a player idle > 18,000 blocks
 - You get 10% of their pending tax as bounty
 - Cannot settle yourself or the king
+- Command: `npm run cli settle-delinquent <address>`
 
 ### King-Only Actions
 
